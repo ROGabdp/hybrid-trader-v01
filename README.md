@@ -149,8 +149,22 @@ python train_lstm_models.py
 ```
 
 此步驟將使用 2000-2023 年的數據訓練 LSTM T+1 與 T+5 模型。
-
-### 2. 執行完整流程 (Full Pipeline)
+ 
+ ### 2. 每日維運 (Daily Operations)
+ 
+ 這是 v2.2 新增的自動化維運腳本，能自動完成「模型重訓 → 特徵工程 → 雙模型推論 → 產生報告」的所有流程。
+ 
+ ```bash
+ python daily_ops_dual.py
+ ```
+ 
+ **特點：**
+ - 自動檢查模型時效，過期自動重訓
+ - 自動解決資料前處理的 lookahead bias
+ - 整合 Aggressive (ROI 85%) 與 Conservative (MDD -6%) 雙策略
+ - 輸出 JSON 與 TXT 戰情報告 (`daily_runs/YYYY-MM-DD/reports/`)
+ 
+ ### 3. 執行完整流程 (Full Pipeline)
 
 ```bash
 python ptrl_hybrid_system.py

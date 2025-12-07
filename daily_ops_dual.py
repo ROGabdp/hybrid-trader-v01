@@ -5,13 +5,16 @@ Daily Operations with Dual Strategy & Versioning (v2.1 - Patched)
 ================================================================================
 每日維運腳本 - 雙策略推論與版本控管
 
-修正紀錄 (v2.1):
+修正紀錄 (v2.2):
 1. [Fix] Step 1 改為直接呼叫 model registry 腳本，並傳入動態日期 (確保模型更新至今日)
 2. [Fix] Step 2 補上 target_scaler 的載入與注入 (防止 inverse_transform 失敗)
 3. [Safety] 增加 import 檢查與錯誤處理
+4. [Fix] yfinance end_date 加一天 (因為 yf.download 的 end 是 exclusive)
+5. [Fix] 使用實際下載資料的最後日期作為工作區日期 (避免週末/盤中執行時日期不符)
+6. [Safety] meta.json 載入加上 try-except 防護
 
 作者：Phil Liang (Fixed by Gemini)
-日期：2025-12-07
+日期：2025-12-07 (v2.2 Updated)
 ================================================================================
 """
 
@@ -137,23 +140,21 @@ def train_and_archive_lstm(workspace: dict, end_date: str):
 
 
 # =============================================================================
-# Step 2: 隔離式特徵工程 (修正：補上 Target Scaler)
+# Step 2: 隔離式特徵工程 (修正版)
 # =============================================================================
 def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame:
     print("\n" + "=" * 60)
     print("🔧 Step 2: 隔離式特徵工程 (模型注入)")
     print("=" * 60)
     
-    # 定義 Custom Object (必須與訓練時一致，才能載入模型)
-    class SelfAttention(layers.Layer):
-        def __init__(self, **kwargs): super(SelfAttention, self).__init__(**kwargs)
-        def build(self, input_shape):
-            self.units = input_shape[-1]
-            self.W_q = self.add_weight(name='W_query', shape=(self.units, self.units), initializer='glorot_uniform', trainable=True)
-            self.W_k = self.add_weight(name='W_key', shape=(self.units, self.units), initializer='glorot_uniform', trainable=True)
-        def call(self, inputs): # 簡化版 call，實際權重會從檔案載入
-            Q = inputs
-            return inputs 
+    # [修正] 直接從原始訓練腳本引用正確的 Layer 定義
+    # 這樣確保數學運算邏輯 (Attention Score 計算) 與訓練時完全一致
+    try:
+        from twii_model_registry_5d import SelfAttention
+        print("[System] 成功引用原始 SelfAttention 類別")
+    except ImportError:
+        print("[Error] 無法引用 twii_model_registry_5d，請確認檔案是否存在")
+        sys.exit(1)
 
     # 輔助函式：載入整組模型元件
     def load_model_components(model_dir):
@@ -164,25 +165,21 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
         latest_keras = sorted(keras_files)[-1]
         print(f"  ...Loading {os.path.basename(latest_keras)}")
         
-        # 載入模型
-        # 注意：這裡使用上面的 Dummy SelfAttention 讓 Keras 不會報錯，權重會被覆蓋
-        try:
-            model = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SelfAttention})
-        except:
-            # 如果上面失敗，嘗試引用原始檔案的 Class (備案)
-            from twii_model_registry_5d import SelfAttention as SA_Orig
-            model = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SA_Orig})
+        # [修正] 載入模型時使用正確的 Custom Object
+        model = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SelfAttention})
 
-        # 載入 Meta
+        # 載入 Meta (加上錯誤防護)
         meta_file = latest_keras.replace('model_', 'meta_').replace('.keras', '.json')
         meta = {}
         if os.path.exists(meta_file):
-            with open(meta_file, 'r') as f:
-                meta = json.load(f)
+            try:
+                with open(meta_file, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+            except Exception as e:
+                print(f"  ⚠️ 載入 meta 失敗: {e}")
 
         # 載入 Feature Scaler
         scaler_feat_file = latest_keras.replace('model_', 'feature_scaler_').replace('.keras', '.pkl')
-        # 兼容舊版命名
         if not os.path.exists(scaler_feat_file):
              scaler_feat_file = latest_keras.replace('model_', 'scaler_').replace('.keras', '.pkl')
         
@@ -191,9 +188,8 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
             with open(scaler_feat_file, 'rb') as f:
                 scaler_feat = pickle.load(f)
 
-        # 載入 Target Scaler (關鍵修正！)
+        # 載入 Target Scaler
         scaler_tgt_file = latest_keras.replace('model_', 'target_scaler_').replace('.keras', '.pkl')
-        # 兼容舊版命名 (如果舊版只有一個 scaler，則 target = feature)
         if not os.path.exists(scaler_tgt_file):
              scaler_tgt = scaler_feat
         else:
@@ -224,12 +220,19 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
     print("  ✅ 注入完成 (含 Target Scalers)")
 
     # 3. 下載數據 & 計算特徵
-    print(f"\n[Compute] 下載數據 (2020-01-01 ~ {end_date})...")
-    raw_df = yf.download("^TWII", start="2020-01-01", end=end_date, auto_adjust=True, progress=False)
+    # [修正] yfinance 的 end 參數是 exclusive，需要加一天才能包含當日
+    end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+    download_end = end_dt.strftime('%Y-%m-%d')
+    print(f"\n[Compute] 下載數據 (2020-01-01 ~ {end_date}, yf.end={download_end})...")
+    raw_df = yf.download("^TWII", start="2020-01-01", end=download_end, auto_adjust=True, progress=False)
     
     # 確保 columns 格式正確
     if isinstance(raw_df.columns, pd.MultiIndex):
         raw_df.columns = raw_df.columns.get_level_values(0)
+    
+    # [修正] 取得實際下載資料的最後日期 (避免週末/盤中執行時日期不符)
+    actual_last_date = raw_df.index[-1].strftime('%Y-%m-%d')
+    print(f"[Data] 實際資料最後日期: {actual_last_date}")
     
     print(f"[Compute] 計算特徵中 (使用當日模型)...")
     # 強制不使用快取，確保重新計算
@@ -241,11 +244,11 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
         pickle.dump(df, f)
     print(f"[Cache] 特徵已存檔: {cache_file}")
     
-    return df
+    return df, actual_last_date  # [修正] 回傳實際日期供報告使用
 
 
 # =============================================================================
-# Step 3: 雙模型推論
+# Step 3: 雙模型推論 (修正版 - 解決 CUDA Tensor Error)
 # =============================================================================
 def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     print("\n" + "=" * 60)
@@ -287,11 +290,16 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
             b_act, _ = buy_agent.predict(features, deterministic=True)
             # Buy Probability
             b_obs = buy_agent.policy.obs_to_tensor(features)[0]
-            b_prob = buy_agent.policy.get_distribution(b_obs).distribution.probs.detach().numpy()[0]
+            # [修正] 加上 .cpu() 再轉 numpy
+            b_prob = buy_agent.policy.get_distribution(b_obs).distribution.probs.detach().cpu().numpy()[0]
             
             # Sell Action (Construct Sell State: Features + [Current_Return=1.0])
             s_feat = np.concatenate([features[0], [1.0]]).reshape(1, -1)
             s_act, _ = sell_agent.predict(s_feat, deterministic=True)
+            
+            # Sell Probability (Optionally capture probability if needed)
+            # s_obs = sell_agent.policy.obs_to_tensor(s_feat)[0]
+            # s_prob = sell_agent.policy.get_distribution(s_obs).distribution.probs.detach().cpu().numpy()[0]
             
             results[key] = {
                 'name': name,
@@ -304,6 +312,8 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
         except Exception as e:
             results[key] = {'error': str(e)}
             print(f"  [Error] {name}: {e}")
+            import traceback
+            traceback.print_exc() # 印出詳細錯誤以便除錯
 
     # 執行 A (Aggressive)
     run_strategy("Aggressive (ROI 85%)", STRATEGY_A_PATH, 'A')
@@ -399,7 +409,7 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str)
 # =============================================================================
 def main():
     today = datetime.now()
-    # 處理週末 (往前推到週五)
+    # 處理週末 (往前推到週五) - 用於初步估計日期
     if today.weekday() == 5: today -= timedelta(days=1)
     elif today.weekday() == 6: today -= timedelta(days=2)
     
@@ -412,14 +422,19 @@ def main():
     # Step 1 (Train up to Today)
     train_and_archive_lstm(ws, date_str)
     
-    # Step 2
-    df = isolated_feature_engineering(ws, date_str)
+    # Step 2 - [修正] 接收實際資料日期
+    df, actual_date = isolated_feature_engineering(ws, date_str)
+    
+    # [修正] 如果實際日期與預估日期不同，顯示警告
+    if actual_date != date_str:
+        print(f"[Warning] 預估日期 {date_str} 與實際資料日期 {actual_date} 不同")
+        print(f"[Info] 報告將使用實際資料日期: {actual_date}")
     
     # Step 3
     res = dual_inference(ws, df)
     
-    # Step 4
-    generate_report(ws, df, res, date_str)
+    # Step 4 - [修正] 使用實際資料日期生成報告
+    generate_report(ws, df, res, actual_date)
 
 if __name__ == "__main__":
     main()
