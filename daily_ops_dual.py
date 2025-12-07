@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-Daily Operations with Dual Strategy & Versioning
+Daily Operations with Dual Strategy & Versioning (v2 - Fixed)
 ================================================================================
 每日維運腳本 - 雙策略推論與版本控管
 
+修正重點：
+1. 引用主系統 (ptrl_hybrid_system) 確保特徵工程一致性
+2. 透過模型注入 (Model Injection) 強制使用當日訓練的 LSTM 模型
+3. 使用 subprocess 執行 LSTM 訓練以釋放 GPU 記憶體
+
 功能：
 1. 建立當日專屬工作區 (daily_runs/{date}/)
-2. LSTM 全量重訓與封存
-3. 隔離式特徵工程 (使用當日模型)
+2. LSTM 全量重訓與封存 (subprocess)
+3. 隔離式特徵工程 (模型注入 + 主系統計算)
 4. 雙模型推論 (Aggressive vs Conservative)
 5. 輸出戰情儀表板與日誌
 
@@ -21,6 +26,9 @@ import os
 import sys
 import shutil
 import pickle
+import subprocess
+import json
+import glob
 from datetime import datetime, timedelta
 
 # 設定 UTF-8 輸出
@@ -32,7 +40,11 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from tqdm import tqdm
+
+# =============================================================================
+# 引用主系統 (關鍵修正)
+# =============================================================================
+import ptrl_hybrid_system as core_system
 
 # =============================================================================
 # 設定路徑
@@ -60,6 +72,8 @@ def create_daily_workspace(date_str: str) -> dict:
     paths = {
         'root': daily_path,
         'lstm_models': os.path.join(daily_path, 'lstm_models'),
+        'lstm_5d': os.path.join(daily_path, 'lstm_models', 'saved_models_5d'),
+        'lstm_1d': os.path.join(daily_path, 'lstm_models', 'saved_models_multivariate'),
         'cache': os.path.join(daily_path, 'cache'),
         'reports': os.path.join(daily_path, 'reports'),
     }
@@ -72,96 +86,104 @@ def create_daily_workspace(date_str: str) -> dict:
 
 
 # =============================================================================
-# Step 1: LSTM 全量重訓與封存
+# Step 1: LSTM 全量重訓與封存 (使用 subprocess)
 # =============================================================================
 def train_and_archive_lstm(workspace: dict, end_date: str):
     """
-    訓練 LSTM 模型並封存到當日工作區
+    使用 subprocess 訓練 LSTM 模型並封存到當日工作區
+    
+    使用 subprocess 的好處：
+    - 訓練結束後自動釋放 GPU 記憶體
+    - 避免訓練過程中的記憶體洩漏影響後續推論
     
     Args:
         workspace: 當日工作區路徑字典
         end_date: 訓練結束日期 (YYYY-MM-DD)
     """
     print("\n" + "=" * 60)
-    print("📚 Step 1: LSTM 全量重訓與封存")
+    print("📚 Step 1: LSTM 全量重訓與封存 (subprocess)")
     print("=" * 60)
     
-    # 動態引入模型訓練模組
-    try:
-        import twii_model_registry_5d as registry_5d
-        import twii_model_registry_multivariate as registry_1d
-    except ImportError as e:
-        print(f"[Error] 無法載入 LSTM 模組: {e}")
-        return False
+    # =========================================================================
+    # 使用 subprocess 執行訓練腳本
+    # =========================================================================
+    train_script = os.path.join(PROJECT_PATH, 'train_lstm_models.py')
     
-    start_date = "2000-01-01"
-    
-    # =========================================================================
-    # 訓練 T+5 模型
-    # =========================================================================
-    print(f"\n[LSTM T+5] 訓練範圍: {start_date} ~ {end_date}")
-    try:
-        # 下載數據
-        df_5d = yf.download("^TWII", start=start_date, end=end_date, auto_adjust=True, progress=False)
-        if len(df_5d) < 100:
-            print("[Error] 數據不足，跳過 T+5 訓練")
-        else:
-            # 訓練模型
-            registry_5d.train_model(df_5d, start_date, end_date)
-            print("[LSTM T+5] ✅ 訓練完成")
-    except Exception as e:
-        print(f"[LSTM T+5] 訓練失敗: {e}")
-    
-    # =========================================================================
-    # 訓練 T+1 模型
-    # =========================================================================
-    print(f"\n[LSTM T+1] 訓練範圍: {start_date} ~ {end_date}")
-    try:
-        # 下載數據
-        df_1d = yf.download("^TWII", start=start_date, end=end_date, auto_adjust=True, progress=False)
-        if len(df_1d) < 100:
-            print("[Error] 數據不足，跳過 T+1 訓練")
-        else:
-            # 訓練模型
-            registry_1d.train_model(df_1d, start_date, end_date)
-            print("[LSTM T+1] ✅ 訓練完成")
-    except Exception as e:
-        print(f"[LSTM T+1] 訓練失敗: {e}")
+    if os.path.exists(train_script):
+        print(f"\n[Training] 執行 LSTM 訓練腳本...")
+        print(f"[Training] 結束日期: {end_date}")
+        
+        try:
+            # 執行訓練腳本 (在獨立進程中)
+            result = subprocess.run(
+                [sys.executable, train_script],
+                cwd=PROJECT_PATH,
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 分鐘超時
+            )
+            
+            if result.returncode == 0:
+                print("[Training] ✅ LSTM 訓練完成")
+            else:
+                print(f"[Training] ⚠️ 訓練腳本返回非零代碼: {result.returncode}")
+                if result.stderr:
+                    print(f"[Training] stderr: {result.stderr[:500]}")
+                    
+        except subprocess.TimeoutExpired:
+            print("[Training] ⚠️ 訓練超時 (10 分鐘)")
+        except Exception as e:
+            print(f"[Training] ⚠️ 執行訓練腳本失敗: {e}")
+    else:
+        print(f"[Warning] 找不到訓練腳本: {train_script}")
+        print("[Warning] 將使用現有模型...")
     
     # =========================================================================
     # 封存模型到當日工作區
     # =========================================================================
     print("\n[Archive] 封存模型到當日工作區...")
     
-    archive_path = workspace['lstm_models']
-    
     # 複製 T+5 模型
-    for src_dir in [DEFAULT_LSTM_5D_PATH]:
-        if os.path.exists(src_dir):
-            dest_dir = os.path.join(archive_path, os.path.basename(src_dir))
-            if os.path.exists(dest_dir):
-                shutil.rmtree(dest_dir)
-            shutil.copytree(src_dir, dest_dir)
-            print(f"  ✅ 已複製: {os.path.basename(src_dir)}")
+    if os.path.exists(DEFAULT_LSTM_5D_PATH):
+        dest_dir = workspace['lstm_5d']
+        
+        # 複製所有模型檔案
+        for file_pattern in ['*.keras', '*.pkl', '*.json', '*.png']:
+            for src_file in glob.glob(os.path.join(DEFAULT_LSTM_5D_PATH, file_pattern)):
+                dest_file = os.path.join(dest_dir, os.path.basename(src_file))
+                shutil.copy2(src_file, dest_file)
+        
+        print(f"  ✅ T+5 模型已封存: {dest_dir}")
+    else:
+        print(f"  ⚠️ 找不到 T+5 模型: {DEFAULT_LSTM_5D_PATH}")
     
     # 複製 T+1 模型
-    for src_dir in [DEFAULT_LSTM_1D_PATH]:
-        if os.path.exists(src_dir):
-            dest_dir = os.path.join(archive_path, os.path.basename(src_dir))
-            if os.path.exists(dest_dir):
-                shutil.rmtree(dest_dir)
-            shutil.copytree(src_dir, dest_dir)
-            print(f"  ✅ 已複製: {os.path.basename(src_dir)}")
+    if os.path.exists(DEFAULT_LSTM_1D_PATH):
+        dest_dir = workspace['lstm_1d']
+        
+        for file_pattern in ['*.keras', '*.pkl', '*.json', '*.png']:
+            for src_file in glob.glob(os.path.join(DEFAULT_LSTM_1D_PATH, file_pattern)):
+                dest_file = os.path.join(dest_dir, os.path.basename(src_file))
+                shutil.copy2(src_file, dest_file)
+        
+        print(f"  ✅ T+1 模型已封存: {dest_dir}")
+    else:
+        print(f"  ⚠️ 找不到 T+1 模型: {DEFAULT_LSTM_1D_PATH}")
     
     return True
 
 
 # =============================================================================
-# Step 2: 隔離式特徵工程
+# Step 2: 隔離式特徵工程 (模型注入 + 主系統計算)
 # =============================================================================
 def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame:
     """
     使用當日封存的 LSTM 模型進行特徵工程
+    
+    關鍵修正：
+    1. 從當日工作區載入 LSTM 模型
+    2. 透過模型注入 (Monkey Patching) 覆蓋 core_system._LSTM_MODELS
+    3. 呼叫 core_system.calculate_features() 確保特徵計算一致
     
     Args:
         workspace: 當日工作區路徑字典
@@ -171,15 +193,16 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
         包含所有特徵的 DataFrame
     """
     print("\n" + "=" * 60)
-    print("🔧 Step 2: 隔離式特徵工程")
+    print("🔧 Step 2: 隔離式特徵工程 (模型注入)")
     print("=" * 60)
     
     import tensorflow as tf
     from tensorflow import keras
     from keras import layers
-    import ta
     
-    # 自訂 SelfAttention 層 (與原始模型相同)
+    # =========================================================================
+    # 定義 SelfAttention 層 (與訓練時相同)
+    # =========================================================================
     class SelfAttention(layers.Layer):
         def __init__(self, **kwargs):
             super(SelfAttention, self).__init__(**kwargs)
@@ -198,195 +221,122 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
             return tf.matmul(attention, inputs)
     
     # =========================================================================
-    # 載入當日封存的 LSTM 模型
+    # 從當日工作區載入 LSTM 模型
     # =========================================================================
-    lstm_5d_path = os.path.join(workspace['lstm_models'], 'saved_models_5d')
-    lstm_1d_path = os.path.join(workspace['lstm_models'], 'saved_models_multivariate')
+    print("\n[Model Injection] 載入當日封存的 LSTM 模型...")
     
     model_5d, scaler_5d, meta_5d = None, None, None
     model_1d, scaler_1d, meta_1d = None, None, None
     
     # 載入 T+5 模型
-    if os.path.exists(lstm_5d_path):
-        import glob
-        import json
+    lstm_5d_path = workspace['lstm_5d']
+    keras_files_5d = glob.glob(os.path.join(lstm_5d_path, "*.keras"))
+    
+    if keras_files_5d:
+        latest_keras = sorted(keras_files_5d)[-1]
+        model_5d = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SelfAttention})
         
-        keras_files = glob.glob(os.path.join(lstm_5d_path, "*.keras"))
-        if keras_files:
-            latest_keras = sorted(keras_files)[-1]
-            model_5d = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SelfAttention})
-            
-            # 載入 scaler
-            scaler_file = latest_keras.replace('model_', 'scaler_').replace('.keras', '.pkl')
-            if os.path.exists(scaler_file):
-                with open(scaler_file, 'rb') as f:
-                    scaler_5d = pickle.load(f)
-            
-            # 載入 meta
-            meta_file = latest_keras.replace('model_', 'meta_').replace('.keras', '.json')
-            if os.path.exists(meta_file):
-                with open(meta_file, 'r') as f:
-                    meta_5d = json.load(f)
-            
-            print(f"[LSTM T+5] ✅ 已載入: {os.path.basename(latest_keras)}")
+        # 載入 scaler
+        scaler_file = latest_keras.replace('model_', 'scaler_').replace('.keras', '.pkl')
+        if os.path.exists(scaler_file):
+            with open(scaler_file, 'rb') as f:
+                scaler_5d = pickle.load(f)
+        
+        # 載入 meta
+        meta_file = latest_keras.replace('model_', 'meta_').replace('.keras', '.json')
+        if os.path.exists(meta_file):
+            with open(meta_file, 'r') as f:
+                meta_5d = json.load(f)
+        
+        print(f"  ✅ T+5 模型: {os.path.basename(latest_keras)}")
+    else:
+        print(f"  ⚠️ 找不到 T+5 模型檔案: {lstm_5d_path}")
     
     # 載入 T+1 模型
-    if os.path.exists(lstm_1d_path):
-        import glob
-        import json
+    lstm_1d_path = workspace['lstm_1d']
+    keras_files_1d = glob.glob(os.path.join(lstm_1d_path, "*.keras"))
+    
+    if keras_files_1d:
+        latest_keras = sorted(keras_files_1d)[-1]
+        model_1d = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SelfAttention})
         
-        keras_files = glob.glob(os.path.join(lstm_1d_path, "*.keras"))
-        if keras_files:
-            latest_keras = sorted(keras_files)[-1]
-            model_1d = keras.models.load_model(latest_keras, custom_objects={'SelfAttention': SelfAttention})
-            
-            # 載入 scaler
-            scaler_file = latest_keras.replace('model_', 'scaler_').replace('.keras', '.pkl')
-            if os.path.exists(scaler_file):
-                with open(scaler_file, 'rb') as f:
-                    scaler_1d = pickle.load(f)
-            
-            # 載入 meta
-            meta_file = latest_keras.replace('model_', 'meta_').replace('.keras', '.json')
-            if os.path.exists(meta_file):
-                with open(meta_file, 'r') as f:
-                    meta_1d = json.load(f)
-            
-            print(f"[LSTM T+1] ✅ 已載入: {os.path.basename(latest_keras)}")
+        # 載入 scaler
+        scaler_file = latest_keras.replace('model_', 'scaler_').replace('.keras', '.pkl')
+        if os.path.exists(scaler_file):
+            with open(scaler_file, 'rb') as f:
+                scaler_1d = pickle.load(f)
+        
+        # 載入 meta
+        meta_file = latest_keras.replace('model_', 'meta_').replace('.keras', '.json')
+        if os.path.exists(meta_file):
+            with open(meta_file, 'r') as f:
+                meta_1d = json.load(f)
+        
+        print(f"  ✅ T+1 模型: {os.path.basename(latest_keras)}")
+    else:
+        print(f"  ⚠️ 找不到 T+1 模型檔案: {lstm_1d_path}")
+    
+    # =========================================================================
+    # 模型注入 (Monkey Patching core_system._LSTM_MODELS)
+    # =========================================================================
+    print("\n[Model Injection] 注入模型到主系統...")
+    
+    # 確保 _LSTM_MODELS 字典存在
+    if not hasattr(core_system, '_LSTM_MODELS'):
+        core_system._LSTM_MODELS = {}
+    
+    # 注入 T+5 模型
+    core_system._LSTM_MODELS['model_5d'] = model_5d
+    core_system._LSTM_MODELS['scaler_feat_5d'] = scaler_5d
+    core_system._LSTM_MODELS['meta_5d'] = meta_5d
+    
+    # 注入 T+1 模型
+    core_system._LSTM_MODELS['model_1d'] = model_1d
+    core_system._LSTM_MODELS['scaler_feat_1d'] = scaler_1d
+    core_system._LSTM_MODELS['meta_1d'] = meta_1d
+    
+    # 標記為已載入
+    core_system._LSTM_MODELS['loaded'] = True
+    
+    print("  ✅ 模型注入完成")
     
     # =========================================================================
     # 下載最新數據
     # =========================================================================
     print("\n[Data] 下載 ^TWII 數據...")
-    df = yf.download("^TWII", start="2020-01-01", end=end_date, auto_adjust=True, progress=False)
     
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    # 下載足夠長的歷史數據以計算所有指標
+    raw_df = yf.download("^TWII", start="2020-01-01", end=end_date, auto_adjust=True, progress=False)
     
-    print(f"[Data] 數據範圍: {df.index[0].strftime('%Y-%m-%d')} ~ {df.index[-1].strftime('%Y-%m-%d')}")
-    print(f"[Data] 總筆數: {len(df)}")
+    if isinstance(raw_df.columns, pd.MultiIndex):
+        raw_df.columns = raw_df.columns.get_level_values(0)
     
-    # =========================================================================
-    # 計算技術指標
-    # =========================================================================
-    print("\n[Features] 計算技術指標...")
-    
-    # 基礎價格指標
-    df['Norm_Open'] = df['Open'] / df['Close'].rolling(20).mean()
-    df['Norm_High'] = df['High'] / df['Close'].rolling(20).mean()
-    df['Norm_Low'] = df['Low'] / df['Close'].rolling(20).mean()
-    df['Norm_Close'] = df['Close'] / df['Close'].rolling(20).mean()
-    
-    # Donchian Channel
-    df['DC_High'] = df['High'].rolling(20).max()
-    df['DC_Low'] = df['Low'].rolling(20).min()
-    df['DC_Position'] = (df['Close'] - df['DC_Low']) / (df['DC_High'] - df['DC_Low'] + 1e-8)
-    
-    # SuperTrend (簡化版)
-    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=10)
-    df['SuperTrend_Signal'] = np.where(df['Close'] > df['Close'].rolling(10).mean() + df['ATR'], 1,
-                                        np.where(df['Close'] < df['Close'].rolling(10).mean() - df['ATR'], -1, 0))
-    
-    # Heikin-Ashi
-    df['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    df['HA_Open'] = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
-    df['HA_Trend'] = np.where(df['HA_Close'] > df['HA_Open'], 1, -1)
-    
-    # RSI, MFI
-    df['RSI'] = ta.momentum.rsi(df['Close'], window=14) / 100
-    df['MFI'] = ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14) / 100
-    
-    # MA
-    df['MA10'] = df['Close'].rolling(10).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-    df['MA60'] = df['Close'].rolling(60).mean()
-    df['MA_Ratio_10_60'] = df['MA10'] / df['MA60']
-    
-    # Relative Strength
-    df['RS_5d'] = df['Close'].pct_change(5)
-    df['RS_20d'] = df['Close'].pct_change(20)
-    
-    # Volume
-    df['Vol_Ratio'] = df['Volume'] / df['Volume'].rolling(20).mean()
+    print(f"[Data] 數據範圍: {raw_df.index[0].strftime('%Y-%m-%d')} ~ {raw_df.index[-1].strftime('%Y-%m-%d')}")
+    print(f"[Data] 總筆數: {len(raw_df)}")
     
     # =========================================================================
-    # 計算 LSTM 預測特徵
+    # 使用主系統計算特徵 (關鍵修正)
     # =========================================================================
-    print("\n[LSTM] 計算預測特徵...")
+    print("\n[Features] 使用主系統計算特徵 (確保一致性)...")
     
-    df['LSTM_Pred_1d'] = 0.0
-    df['LSTM_Pred_5d'] = 0.0
-    df['LSTM_Conf_5d'] = 0.5
-    
-    # LSTM 特徵欄位
-    lstm_features = ['Close', 'Volume', 'RSI', 'MFI']
-    
-    if model_5d is not None and scaler_5d is not None:
-        LOOKBACK_5D = 30
-        
-        for i in range(LOOKBACK_5D, len(df)):
-            try:
-                window = df.iloc[i-LOOKBACK_5D:i][['Close', 'Volume']].copy()
-                window['Volume'] = np.log1p(window['Volume'])
-                
-                # 添加 KD, MACD_Hist
-                window['KD'] = df['RSI'].iloc[i-LOOKBACK_5D:i].values * 100
-                window['MACD_Hist'] = df['Close'].iloc[i-LOOKBACK_5D:i].pct_change().fillna(0).values
-                
-                scaled = scaler_5d.transform(window.values)
-                X = scaled.reshape(1, LOOKBACK_5D, -1)
-                
-                # MC Dropout 預測
-                preds = []
-                for _ in range(5):
-                    pred = model_5d(X, training=True).numpy()[0, 0]
-                    preds.append(pred)
-                
-                mean_pred = np.mean(preds)
-                std_pred = np.std(preds)
-                
-                # 反正規化
-                price_min = meta_5d.get('price_min', df['Close'].min())
-                price_max = meta_5d.get('price_max', df['Close'].max())
-                pred_price = mean_pred * (price_max - price_min) + price_min
-                current_price = df['Close'].iloc[i]
-                
-                df.iloc[i, df.columns.get_loc('LSTM_Pred_5d')] = (pred_price - current_price) / current_price
-                df.iloc[i, df.columns.get_loc('LSTM_Conf_5d')] = max(0, min(1, 1 - std_pred * 10))
-                
-            except Exception as e:
-                pass
-    
-    if model_1d is not None and scaler_1d is not None:
-        LOOKBACK_1D = 10
-        
-        for i in range(LOOKBACK_1D, len(df)):
-            try:
-                window = df.iloc[i-LOOKBACK_1D:i][['Close', 'Volume']].copy()
-                window['Volume'] = np.log1p(window['Volume'])
-                window['KD'] = df['RSI'].iloc[i-LOOKBACK_1D:i].values * 100
-                window['MACD_Hist'] = df['Close'].iloc[i-LOOKBACK_1D:i].pct_change().fillna(0).values
-                
-                scaled = scaler_1d.transform(window.values)
-                X = scaled.reshape(1, LOOKBACK_1D, -1)
-                
-                pred = model_1d.predict(X, verbose=0)[0, 0]
-                
-                price_min = meta_1d.get('price_min', df['Close'].min())
-                price_max = meta_1d.get('price_max', df['Close'].max())
-                pred_price = pred * (price_max - price_min) + price_min
-                current_price = df['Close'].iloc[i]
-                
-                df.iloc[i, df.columns.get_loc('LSTM_Pred_1d')] = (pred_price - current_price) / current_price
-                
-            except Exception as e:
-                pass
+    # 呼叫主系統的 calculate_features 函數
+    # 這確保所有指標計算邏輯與訓練時 100% 一致
+    try:
+        df = core_system.calculate_features(
+            df=raw_df.copy(),
+            benchmark_df=raw_df.copy(),  # 使用自身作為 benchmark
+            ticker="^TWII",
+            use_cache=False  # 不使用快取，確保重新計算
+        )
+        print(f"[Features] ✅ 特徵計算完成，總欄位數: {len(df.columns)}")
+    except Exception as e:
+        print(f"[Features] ⚠️ 特徵計算失敗: {e}")
+        print("[Features] 嘗試使用簡化特徵...")
+        df = raw_df.copy()
     
     # =========================================================================
-    # 儲存快取
+    # 儲存快取到當日工作區
     # =========================================================================
-    df = df.dropna()
-    
     cache_path = os.path.join(workspace['cache'], 'twii_features.pkl')
     with open(cache_path, 'wb') as f:
         pickle.dump(df, f)
@@ -417,25 +367,27 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     
     from stable_baselines3 import PPO
     
-    # 特徵欄位 (與訓練時相同)
-    FEATURE_COLS = [
-        'Norm_Open', 'Norm_High', 'Norm_Low', 'Norm_Close',
-        'DC_Position', 'SuperTrend_Signal', 'HA_Trend',
-        'RSI', 'MFI', 'ATR', 'MA_Ratio_10_60',
-        'RS_5d', 'RS_20d', 'Vol_Ratio',
-        'LSTM_Pred_1d', 'LSTM_Pred_5d', 'LSTM_Conf_5d'
-    ]
+    # 使用主系統定義的特徵欄位 (確保一致性)
+    FEATURE_COLS = core_system.FEATURE_COLS
     
     # 取得最新一筆數據
     latest = df.iloc[-1]
     
     # 準備特徵向量
     available_cols = [c for c in FEATURE_COLS if c in df.columns]
+    
+    if len(available_cols) < len(FEATURE_COLS):
+        missing = set(FEATURE_COLS) - set(available_cols)
+        print(f"[Warning] 缺少特徵欄位: {missing}")
+    
     features = latest[available_cols].values.astype(np.float32)
     
-    # 補齊缺失的欄位
-    if len(features) < 23:
-        features = np.pad(features, (0, 23 - len(features)), mode='constant', constant_values=0)
+    # 補齊缺失的欄位 (填充 0)
+    if len(features) < len(FEATURE_COLS):
+        features = np.pad(features, (0, len(FEATURE_COLS) - len(features)), mode='constant', constant_values=0)
+    
+    # 處理 NaN
+    features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
     
     results = {}
     
@@ -448,31 +400,41 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     sell_a_path = os.path.join(STRATEGY_A_PATH, 'ppo_sell_twii_final.zip')
     
     if os.path.exists(buy_a_path) and os.path.exists(sell_a_path):
-        buy_model_a = PPO.load(buy_a_path)
-        sell_model_a = PPO.load(sell_a_path)
-        
-        # Buy 推論
-        buy_action_a, _ = buy_model_a.predict(features, deterministic=True)
-        buy_probs_a = buy_model_a.policy.get_distribution(
-            buy_model_a.policy.obs_to_tensor(features.reshape(1, -1))[0]
-        ).distribution.probs.detach().numpy()[0]
-        
-        # Sell 推論 (需要加入持有報酬)
-        sell_features = np.concatenate([features, [1.0]])  # 假設持有報酬 0%
-        sell_action_a, _ = sell_model_a.predict(sell_features, deterministic=True)
-        
-        results['strategy_a'] = {
-            'name': 'Aggressive (ROI 85%)',
-            'buy_action': int(buy_action_a),
-            'buy_signal': 'BUY' if buy_action_a == 1 else 'HOLD',
-            'buy_confidence': float(buy_probs_a[1]) if buy_action_a == 1 else float(buy_probs_a[0]),
-            'sell_action': int(sell_action_a),
-            'sell_signal': 'SELL' if sell_action_a == 1 else 'HOLD',
-        }
-        print(f"  Buy: {results['strategy_a']['buy_signal']} (Conf: {results['strategy_a']['buy_confidence']:.2%})")
-        print(f"  Sell: {results['strategy_a']['sell_signal']}")
+        try:
+            buy_model_a = PPO.load(buy_a_path)
+            sell_model_a = PPO.load(sell_a_path)
+            
+            # Buy 推論
+            buy_action_a, _ = buy_model_a.predict(features, deterministic=True)
+            
+            # 計算信心度
+            try:
+                obs_tensor = buy_model_a.policy.obs_to_tensor(features.reshape(1, -1))[0]
+                buy_probs_a = buy_model_a.policy.get_distribution(obs_tensor).distribution.probs.detach().numpy()[0]
+                buy_confidence = float(buy_probs_a[1]) if buy_action_a == 1 else float(buy_probs_a[0])
+            except:
+                buy_confidence = 0.5
+            
+            # Sell 推論 (需要加入持有報酬)
+            sell_features = np.concatenate([features, [1.0]])  # 假設持有報酬 0%
+            sell_action_a, _ = sell_model_a.predict(sell_features, deterministic=True)
+            
+            results['strategy_a'] = {
+                'name': 'Aggressive (ROI 85%)',
+                'buy_action': int(buy_action_a),
+                'buy_signal': 'BUY' if buy_action_a == 1 else 'HOLD',
+                'buy_confidence': buy_confidence,
+                'sell_action': int(sell_action_a),
+                'sell_signal': 'SELL' if sell_action_a == 1 else 'HOLD',
+            }
+            print(f"  Buy: {results['strategy_a']['buy_signal']} (Conf: {results['strategy_a']['buy_confidence']:.2%})")
+            print(f"  Sell: {results['strategy_a']['sell_signal']}")
+            
+        except Exception as e:
+            print(f"  [Error] 推論失敗: {e}")
+            results['strategy_a'] = {'name': 'Aggressive', 'error': str(e)}
     else:
-        print(f"  [Warning] 找不到模型: {buy_a_path}")
+        print(f"  [Warning] 找不到模型")
         results['strategy_a'] = {'name': 'Aggressive', 'error': 'Model not found'}
     
     # =========================================================================
@@ -484,31 +446,40 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     sell_b_path = os.path.join(STRATEGY_B_PATH, 'ppo_sell_twii_final.zip')
     
     if os.path.exists(buy_b_path) and os.path.exists(sell_b_path):
-        buy_model_b = PPO.load(buy_b_path)
-        sell_model_b = PPO.load(sell_b_path)
-        
-        # Buy 推論
-        buy_action_b, _ = buy_model_b.predict(features, deterministic=True)
-        buy_probs_b = buy_model_b.policy.get_distribution(
-            buy_model_b.policy.obs_to_tensor(features.reshape(1, -1))[0]
-        ).distribution.probs.detach().numpy()[0]
-        
-        # Sell 推論
-        sell_features = np.concatenate([features, [1.0]])
-        sell_action_b, _ = sell_model_b.predict(sell_features, deterministic=True)
-        
-        results['strategy_b'] = {
-            'name': 'Conservative (MDD -6%)',
-            'buy_action': int(buy_action_b),
-            'buy_signal': 'BUY' if buy_action_b == 1 else 'HOLD',
-            'buy_confidence': float(buy_probs_b[1]) if buy_action_b == 1 else float(buy_probs_b[0]),
-            'sell_action': int(sell_action_b),
-            'sell_signal': 'SELL' if sell_action_b == 1 else 'HOLD',
-        }
-        print(f"  Buy: {results['strategy_b']['buy_signal']} (Conf: {results['strategy_b']['buy_confidence']:.2%})")
-        print(f"  Sell: {results['strategy_b']['sell_signal']}")
+        try:
+            buy_model_b = PPO.load(buy_b_path)
+            sell_model_b = PPO.load(sell_b_path)
+            
+            # Buy 推論
+            buy_action_b, _ = buy_model_b.predict(features, deterministic=True)
+            
+            try:
+                obs_tensor = buy_model_b.policy.obs_to_tensor(features.reshape(1, -1))[0]
+                buy_probs_b = buy_model_b.policy.get_distribution(obs_tensor).distribution.probs.detach().numpy()[0]
+                buy_confidence = float(buy_probs_b[1]) if buy_action_b == 1 else float(buy_probs_b[0])
+            except:
+                buy_confidence = 0.5
+            
+            # Sell 推論
+            sell_features = np.concatenate([features, [1.0]])
+            sell_action_b, _ = sell_model_b.predict(sell_features, deterministic=True)
+            
+            results['strategy_b'] = {
+                'name': 'Conservative (MDD -6%)',
+                'buy_action': int(buy_action_b),
+                'buy_signal': 'BUY' if buy_action_b == 1 else 'HOLD',
+                'buy_confidence': buy_confidence,
+                'sell_action': int(sell_action_b),
+                'sell_signal': 'SELL' if sell_action_b == 1 else 'HOLD',
+            }
+            print(f"  Buy: {results['strategy_b']['buy_signal']} (Conf: {results['strategy_b']['buy_confidence']:.2%})")
+            print(f"  Sell: {results['strategy_b']['sell_signal']}")
+            
+        except Exception as e:
+            print(f"  [Error] 推論失敗: {e}")
+            results['strategy_b'] = {'name': 'Conservative', 'error': str(e)}
     else:
-        print(f"  [Warning] 找不到模型: {buy_b_path}")
+        print(f"  [Warning] 找不到模型")
         results['strategy_b'] = {'name': 'Conservative', 'error': 'Model not found'}
     
     return results
@@ -543,23 +514,36 @@ def generate_report(workspace: dict, df: pd.DataFrame, inference_results: dict, 
     
     report_lines.append("\n📈 市場數據 (^TWII)")
     report_lines.append("-" * 40)
-    report_lines.append(f"  收盤價:     {latest['Close']:.2f}")
-    report_lines.append(f"  最高價:     {latest['High']:.2f}")
-    report_lines.append(f"  最低價:     {latest['Low']:.2f}")
-    report_lines.append(f"  成交量:     {latest['Volume']:,.0f}")
+    report_lines.append(f"  收盤價:     {latest.get('Close', 0):.2f}")
+    report_lines.append(f"  最高價:     {latest.get('High', 0):.2f}")
+    report_lines.append(f"  最低價:     {latest.get('Low', 0):.2f}")
+    report_lines.append(f"  成交量:     {latest.get('Volume', 0):,.0f}")
     
     report_lines.append("\n📊 技術指標")
     report_lines.append("-" * 40)
-    report_lines.append(f"  RSI (14):   {latest.get('RSI', 0) * 100:.1f}")
-    report_lines.append(f"  MFI (14):   {latest.get('MFI', 0) * 100:.1f}")
-    report_lines.append(f"  ATR:        {latest.get('ATR', 0):.2f}")
-    report_lines.append(f"  DC 位置:    {latest.get('DC_Position', 0):.2%}")
+    rsi_val = latest.get('RSI', 0)
+    mfi_val = latest.get('MFI', 0)
+    atr_val = latest.get('ATR', 0)
+    dc_val = latest.get('DC_Position', 0)
+    
+    # RSI/MFI 可能已經是 0-1 或 0-100，統一顯示
+    rsi_display = rsi_val * 100 if rsi_val <= 1 else rsi_val
+    mfi_display = mfi_val * 100 if mfi_val <= 1 else mfi_val
+    
+    report_lines.append(f"  RSI (14):   {rsi_display:.1f}")
+    report_lines.append(f"  MFI (14):   {mfi_display:.1f}")
+    report_lines.append(f"  ATR:        {atr_val:.2f}")
+    report_lines.append(f"  DC 位置:    {dc_val:.2%}")
     
     report_lines.append("\n🤖 LSTM 預測")
     report_lines.append("-" * 40)
-    report_lines.append(f"  T+1 預測漲幅:  {latest.get('LSTM_Pred_1d', 0) * 100:+.2f}%")
-    report_lines.append(f"  T+5 預測漲幅:  {latest.get('LSTM_Pred_5d', 0) * 100:+.2f}%")
-    report_lines.append(f"  T+5 信心度:    {latest.get('LSTM_Conf_5d', 0.5) * 100:.1f}%")
+    lstm_1d = latest.get('LSTM_Pred_1d', 0)
+    lstm_5d = latest.get('LSTM_Pred_5d', 0)
+    lstm_conf = latest.get('LSTM_Conf_5d', 0.5)
+    
+    report_lines.append(f"  T+1 預測漲幅:  {lstm_1d * 100:+.2f}%")
+    report_lines.append(f"  T+5 預測漲幅:  {lstm_5d * 100:+.2f}%")
+    report_lines.append(f"  T+5 信心度:    {lstm_conf * 100:.1f}%")
     
     report_lines.append("\n🎯 策略建議")
     report_lines.append("-" * 40)
@@ -571,7 +555,8 @@ def generate_report(workspace: dict, df: pd.DataFrame, inference_results: dict, 
         report_lines.append(f"    買入訊號: {sa['buy_signal']} (信心度: {sa['buy_confidence']:.1%})")
         report_lines.append(f"    賣出訊號: {sa['sell_signal']}")
     else:
-        report_lines.append("\n  【策略 A: 無法載入】")
+        error_msg = inference_results.get('strategy_a', {}).get('error', '未知錯誤')
+        report_lines.append(f"\n  【策略 A: 無法載入 ({error_msg})】")
     
     # Strategy B
     if 'strategy_b' in inference_results and 'error' not in inference_results['strategy_b']:
@@ -580,9 +565,12 @@ def generate_report(workspace: dict, df: pd.DataFrame, inference_results: dict, 
         report_lines.append(f"    買入訊號: {sb['buy_signal']} (信心度: {sb['buy_confidence']:.1%})")
         report_lines.append(f"    賣出訊號: {sb['sell_signal']}")
     else:
-        report_lines.append("\n  【策略 B: 無法載入】")
+        error_msg = inference_results.get('strategy_b', {}).get('error', '未知錯誤')
+        report_lines.append(f"\n  【策略 B: 無法載入 ({error_msg})】")
     
     report_lines.append("\n" + "=" * 60)
+    report_lines.append("  工作區路徑: " + workspace['root'])
+    report_lines.append("=" * 60)
     
     # 輸出到終端機
     report_text = "\n".join(report_lines)
@@ -593,7 +581,37 @@ def generate_report(workspace: dict, df: pd.DataFrame, inference_results: dict, 
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report_text)
     
-    print(f"\n[Report] 報告已儲存: {report_path}")
+    # 同時儲存 JSON 格式 (方便程式讀取)
+    json_path = os.path.join(workspace['reports'], 'summary.json')
+    json_data = {
+        'date': date_str,
+        'generated_at': datetime.now().isoformat(),
+        'market_data': {
+            'close': float(latest.get('Close', 0)),
+            'high': float(latest.get('High', 0)),
+            'low': float(latest.get('Low', 0)),
+            'volume': float(latest.get('Volume', 0)),
+        },
+        'indicators': {
+            'rsi': float(rsi_display),
+            'mfi': float(mfi_display),
+            'atr': float(atr_val),
+            'dc_position': float(dc_val),
+        },
+        'lstm_predictions': {
+            'pred_1d': float(lstm_1d),
+            'pred_5d': float(lstm_5d),
+            'conf_5d': float(lstm_conf),
+        },
+        'strategies': inference_results,
+    }
+    
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(json_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"\n[Report] 報告已儲存:")
+    print(f"  - TXT: {report_path}")
+    print(f"  - JSON: {json_path}")
 
 
 # =============================================================================
@@ -603,7 +621,7 @@ def main():
     """主程式進入點"""
     
     print("\n" + "=" * 70)
-    print("  🚀 Daily Operations with Dual Strategy & Versioning")
+    print("  🚀 Daily Operations with Dual Strategy & Versioning (v2)")
     print("=" * 70)
     
     # 取得今天日期
@@ -628,7 +646,7 @@ def main():
     # Step 1: LSTM 訓練與封存
     train_and_archive_lstm(workspace, date_str)
     
-    # Step 2: 隔離式特徵工程
+    # Step 2: 隔離式特徵工程 (模型注入)
     df = isolated_feature_engineering(workspace, date_str)
     
     # Step 3: 雙模型推論
