@@ -453,33 +453,79 @@ class SellEnvHybrid(gym.Env):
 # 5. Pre-training 流程
 # =============================================================================
 def run_pretraining(train_data: dict, models_path: str, device: str):
-    """執行預訓練"""
+    """執行預訓練 (含 TensorBoard 日誌記錄)"""
     print(f"\n[System] Starting Pre-training with {len(train_data)} indices...")
     
-    n_envs = min(8, max(1, multiprocessing.cpu_count() - 1))
-    ppo_params = {"learning_rate": 0.0001, "n_steps": max(128, 2048 // n_envs),
-                  "batch_size": 512, "ent_coef": 0.01, "device": device,
-                  "policy_kwargs": dict(net_arch=[64, 64, 64]), "verbose": 1}
+    # 建立日誌目錄
+    tensorboard_log = "./tensorboard_logs/"
+    os.makedirs(tensorboard_log, exist_ok=True)
+    os.makedirs(os.path.join(models_path, "best_pretrain"), exist_ok=True)
     
+    n_envs = min(8, max(1, multiprocessing.cpu_count() - 1))
+    print(f"[System] CPU cores: {multiprocessing.cpu_count()}, Using {n_envs} envs")
+    
+    ppo_params = {
+        "learning_rate": 0.0001, 
+        "n_steps": max(128, 2048 // n_envs),
+        "batch_size": 512, 
+        "ent_coef": 0.01, 
+        "device": device,
+        "policy_kwargs": dict(net_arch=[64, 64, 64]), 
+        "verbose": 1,
+        "tensorboard_log": tensorboard_log  # 啟用 TensorBoard
+    }
+    
+    # =========================================================================
     # Buy Agent
-    print("\n🛒 Training Buy Agent...")
+    # =========================================================================
+    print("\n🛒 Training Buy Agent (Base Model)...")
     buy_env = make_vec_env(BuyEnvHybrid, n_envs=n_envs, vec_env_cls=SubprocVecEnv,
                            env_kwargs={'data_dict': train_data, 'is_training': True})
+    
+    # 建立評估環境
+    eval_buy_env = make_vec_env(BuyEnvHybrid, n_envs=1, vec_env_cls=DummyVecEnv,
+                                env_kwargs={'data_dict': train_data, 'is_training': False})
+    
     buy_model = PPO("MlpPolicy", buy_env, **ppo_params)
-    buy_model.learn(total_timesteps=1_000_000, callback=CheckpointCallback(
-        save_freq=80000, save_path=models_path, name_prefix="ppo_buy_base"))
+    
+    # Callbacks
+    buy_callbacks = CallbackList([
+        CheckpointCallback(save_freq=80000, save_path=models_path, name_prefix="ppo_buy_base"),
+        EvalCallback(eval_buy_env, best_model_save_path=os.path.join(models_path, "best_pretrain"),
+                     log_path="./logs/", eval_freq=10000, n_eval_episodes=50, 
+                     deterministic=True, name_prefix="buy_base")
+    ])
+    
+    buy_model.learn(total_timesteps=1_000_000, callback=buy_callbacks, tb_log_name="buy_pretrain")
     buy_model.save(os.path.join(models_path, "ppo_buy_base"))
     buy_env.close()
+    eval_buy_env.close()
     
+    # =========================================================================
     # Sell Agent
-    print("\n💰 Training Sell Agent...")
+    # =========================================================================
+    print("\n💰 Training Sell Agent (Base Model)...")
     sell_env = make_vec_env(SellEnvHybrid, n_envs=n_envs, vec_env_cls=SubprocVecEnv,
                             env_kwargs={'data_dict': train_data})
+    
+    # 建立評估環境
+    eval_sell_env = make_vec_env(SellEnvHybrid, n_envs=1, vec_env_cls=DummyVecEnv,
+                                 env_kwargs={'data_dict': train_data})
+    
     sell_model = PPO("MlpPolicy", sell_env, **ppo_params)
-    sell_model.learn(total_timesteps=500_000, callback=CheckpointCallback(
-        save_freq=80000, save_path=models_path, name_prefix="ppo_sell_base"))
+    
+    # Callbacks
+    sell_callbacks = CallbackList([
+        CheckpointCallback(save_freq=80000, save_path=models_path, name_prefix="ppo_sell_base"),
+        EvalCallback(eval_sell_env, best_model_save_path=os.path.join(models_path, "best_pretrain"),
+                     log_path="./logs/", eval_freq=10000, n_eval_episodes=50, 
+                     deterministic=True, name_prefix="sell_base")
+    ])
+    
+    sell_model.learn(total_timesteps=500_000, callback=sell_callbacks, tb_log_name="sell_pretrain")
     sell_model.save(os.path.join(models_path, "ppo_sell_base"))
     sell_env.close()
+    eval_sell_env.close()
     
     print("[System] Pre-training Completed.")
     return buy_model, sell_model
@@ -488,16 +534,23 @@ def run_pretraining(train_data: dict, models_path: str, device: str):
 # =============================================================================
 # 6. Fine-tuning 流程 (Transfer Learning)
 # =============================================================================
-def run_finetuning(twii_finetune_data: dict, models_path: str, device: str):
+def run_finetuning(twii_finetune_data: dict, twii_eval_data: dict, models_path: str, device: str):
     """
-    針對 ^TWII 進行微調
+    針對 ^TWII 進行微調 (含 TensorBoard 日誌記錄)
     - 載入預訓練權重
     - 使用較低的 Learning Rate (1e-5)
     - 較短的訓練步數
+    - EvalCallback 監控驗證集表現
     """
     print("\n" + "=" * 60)
-    print("🎯 Phase 4: Fine-tuning for ^TWII")
+    print("🎯 Phase 4: Fine-tuning for ^TWII (with TensorBoard)")
     print("=" * 60)
+    
+    # 建立日誌目錄
+    tensorboard_log = "./tensorboard_logs/"
+    os.makedirs(tensorboard_log, exist_ok=True)
+    os.makedirs(os.path.join(models_path, "best_tuned"), exist_ok=True)
+    os.makedirs("./logs/", exist_ok=True)
     
     n_envs = min(4, max(1, multiprocessing.cpu_count() - 1))
     
@@ -524,17 +577,32 @@ def run_finetuning(twii_finetune_data: dict, models_path: str, device: str):
     buy_env = make_vec_env(BuyEnvHybrid, n_envs=n_envs, vec_env_cls=SubprocVecEnv,
                            env_kwargs={'data_dict': twii_finetune_data, 'is_training': True})
     
-    buy_model = PPO.load(buy_base_path, env=buy_env, device=device)
+    # 建立評估環境 (使用 Backtest 數據子集)
+    eval_buy_env = make_vec_env(BuyEnvHybrid, n_envs=1, vec_env_cls=DummyVecEnv,
+                                env_kwargs={'data_dict': twii_eval_data, 'is_training': False})
+    
+    buy_model = PPO.load(buy_base_path, env=buy_env, device=device,
+                         tensorboard_log=tensorboard_log)
     buy_model.learning_rate = finetune_params["learning_rate"]
     buy_model.ent_coef = finetune_params["ent_coef"]
     
+    # Callbacks
+    buy_callbacks = CallbackList([
+        CheckpointCallback(save_freq=50000, save_path=models_path, name_prefix="ppo_buy_finetune"),
+        EvalCallback(eval_buy_env, best_model_save_path=os.path.join(models_path, "best_tuned"),
+                     log_path="./logs/", eval_freq=5000, n_eval_episodes=30, 
+                     deterministic=True, name_prefix="buy_finetune")
+    ])
+    
     print(f"[Fine-tune] Training Buy Agent for 200,000 steps (LR: {finetune_params['learning_rate']})")
-    buy_model.learn(total_timesteps=200_000)
+    buy_model.learn(total_timesteps=200_000, callback=buy_callbacks, 
+                    tb_log_name="buy_finetune", reset_num_timesteps=False)
     
     buy_final_path = os.path.join(models_path, "ppo_buy_twii_final")
     buy_model.save(buy_final_path)
     print(f"[Fine-tune] Buy Agent saved to: {buy_final_path}")
     buy_env.close()
+    eval_buy_env.close()
     
     # =========================================================================
     # Fine-tune Sell Agent
@@ -545,17 +613,32 @@ def run_finetuning(twii_finetune_data: dict, models_path: str, device: str):
     sell_env = make_vec_env(SellEnvHybrid, n_envs=n_envs, vec_env_cls=SubprocVecEnv,
                             env_kwargs={'data_dict': twii_finetune_data})
     
-    sell_model = PPO.load(sell_base_path, env=sell_env, device=device)
+    # 建立評估環境 (使用 Backtest 數據子集)
+    eval_sell_env = make_vec_env(SellEnvHybrid, n_envs=1, vec_env_cls=DummyVecEnv,
+                                 env_kwargs={'data_dict': twii_eval_data})
+    
+    sell_model = PPO.load(sell_base_path, env=sell_env, device=device,
+                          tensorboard_log=tensorboard_log)
     sell_model.learning_rate = finetune_params["learning_rate"]
     sell_model.ent_coef = finetune_params["ent_coef"]
     
+    # Callbacks
+    sell_callbacks = CallbackList([
+        CheckpointCallback(save_freq=25000, save_path=models_path, name_prefix="ppo_sell_finetune"),
+        EvalCallback(eval_sell_env, best_model_save_path=os.path.join(models_path, "best_tuned"),
+                     log_path="./logs/", eval_freq=5000, n_eval_episodes=30, 
+                     deterministic=True, name_prefix="sell_finetune")
+    ])
+    
     print(f"[Fine-tune] Training Sell Agent for 100,000 steps (LR: {finetune_params['learning_rate']})")
-    sell_model.learn(total_timesteps=100_000)
+    sell_model.learn(total_timesteps=100_000, callback=sell_callbacks, 
+                     tb_log_name="sell_finetune", reset_num_timesteps=False)
     
     sell_final_path = os.path.join(models_path, "ppo_sell_twii_final")
     sell_model.save(sell_final_path)
     print(f"[Fine-tune] Sell Agent saved to: {sell_final_path}")
     sell_env.close()
+    eval_sell_env.close()
     
     print("\n[System] Fine-tuning Completed!")
     return buy_model, sell_model
@@ -899,7 +982,8 @@ if __name__ == "__main__":
     # Fine-tuning
     # =========================================================================
     finetune_data = {'^TWII': twii_finetune_df}
-    buy_model, sell_model = run_finetuning(finetune_data, MODELS_PATH, device)
+    eval_data = {'^TWII': twii_backtest_df}  # 使用 Backtest 數據作為驗證集
+    buy_model, sell_model = run_finetuning(finetune_data, eval_data, MODELS_PATH, device)
     
     if buy_model is None:
         print("[Error] Fine-tuning failed!")
@@ -936,4 +1020,14 @@ if __name__ == "__main__":
     - models_hybrid/ppo_buy_twii_final.zip
     - models_hybrid/ppo_sell_twii_final.zip
     - results_hybrid/final_performance.png
+    
+    📈 TensorBoard 訓練監控：
+    ────────────────────────────────────
+    執行以下指令開啟 TensorBoard：
+    
+        tensorboard --logdir ./tensorboard_logs/
+    
+    開啟瀏覽器前往 http://localhost:6006
+    查看 Loss, Entropy, Reward 等訓練曲線。
+    ────────────────────────────────────
     """)
