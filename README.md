@@ -87,13 +87,30 @@ hybrid-trader-v01/
 
 ## 🛠️ 安裝說明 (Installation)
 
-```bash
-# 複製專案
-git clone https://github.com/YOUR_USERNAME/hybrid-trader-v01.git
-cd hybrid-trader-v01
+### 建議使用虛擬環境 (Virtual Environment)
+在 Windows 上使用虛擬環境可以避免套件版本衝突，強烈建議使用。
 
-# 安裝相依套件
+**方法一：使用自動腳本 (推薦)**
+```powershell
+.\setup_env.ps1
+```
+
+**方法二：手動設定**
+```powershell
+# 1. 建立虛擬環境
+python -m venv venv
+
+# 2. 啟動虛擬環境
+.\venv\Scripts\Activate.ps1
+
+# 3. 安裝套件
 pip install -r requirements.txt
+```
+
+### 已知問題排除
+如果執行腳本時出現權限錯誤，請先執行：
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 ```
 
 ### 系統需求 (Dependencies)
