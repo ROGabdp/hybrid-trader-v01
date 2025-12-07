@@ -61,28 +61,17 @@
 
 ```
 hybrid-trader-v01/
-├── ptrl_hybrid_system.py        # 混合交易系統主程式 (All-in-one)
-├── train_lstm_models.py         # LSTM 模型訓練腳本
-├── twii_model_registry_5d.py    # T+5 LSTM 模型註冊管理
-├── twii_model_registry_multivariate.py  # T+1 LSTM 模型註冊管理
-├── trade_advisor.py             # 交易建議生成器
-├── ptrl_TW50_split_train.py     # 參考：原始 RL 訓練程式
-├── ptrl_TW50_paper_version.py   # 參考：論文實作版本
+├── ptrl_hybrid_system.py        # 核心系統 (特徵計算/訓練邏輯)
+├── train_v3_models.py           # V3 訓練腳本 (Standard)
+├── train_v4_models.py           # V4 訓練腳本 (Lightweight)
+├── daily_ops_dual.py            # 每日維運 (V3 vs V4 比較)
+├── daily_ops_v3.py              # 每日維運 (僅 V3)
+├── daily_ops_v4.py              # 每日維運 (僅 V4)
 │
-├── models_hybrid/               # 訓練好的 RL 模型
-│   ├── ppo_buy_base.zip         # 預訓練 Buy Agent
-│   ├── ppo_sell_base.zip        # 預訓練 Sell Agent
-│   ├── ppo_buy_twii_final.zip   # 微調後 Buy Agent (^TWII)
-│   └── ppo_sell_twii_final.zip  # 微調後 Sell Agent (^TWII)
-│
-├── saved_models_multivariate/   # T+1 LSTM 模型存檔
-├── saved_models_5d/             # T+5 LSTM 模型存檔
-│
-├── data/processed/              # 特徵快取資料
-│   └── *_features.pkl
-│
-└── results_hybrid/              # 回測結果
-    └── final_performance.png
+├── models_hybrid_v3/            # V3 模型存放區
+├── models_hybrid_v4/            # V4 模型存放區
+├── daily_runs_v3/               # V3 每日報告
+└── daily_runs_v4/               # V4 每日報告
 ```
 
 ## 🛠️ 安裝說明 (Installation)
@@ -148,31 +137,37 @@ psutil
 python train_lstm_models.py
 ```
 
-此步驟將使用 2000-2023 年的數據訓練 LSTM T+1 與 T+5 模型。
- 
- ### 2. 每日維運 (Daily Operations)
- 
- 這是 v2.2 新增的自動化維運腳本，能自動完成「模型重訓 → 特徵工程 → 雙模型推論 → 產生報告」的所有流程。
- 
- ```bash
- python daily_ops_dual.py
- ```
- 
- **特點：**
- - 自動檢查模型時效，過期自動重訓
- - 自動解決資料前處理的 lookahead bias
- - 整合 Aggressive (ROI 85%) 與 Conservative (MDD -6%) 雙策略
- - 輸出 JSON 與 TXT 戰情報告 (`daily_runs/YYYY-MM-DD/reports/`)
- 
- ### 3. 執行完整流程 (Full Pipeline)
+### 2. 訓練 RL 模型 (V3 vs V4)
 
-```bash
-python ptrl_hybrid_system.py
-```
+本專案提供兩個版本的 RL 訓練腳本，請依需求選擇：
 
-此指令將執行：
-1. **Phase 1-3**: 使用 5 個全球指數預訓練 RL Agent (如果尚未完成)
-2. **Phase 4**: 針對 ^TWII 進行微調 (Fine-tune) 並執行回測
+| 特性 | V3 (Standard) | V4 (Lightweight) |
+|------|--------------|------------------|
+| **用途** | 標準版，適合完整訓練 | 輕量版，適合快速實驗 |
+| **Buy Fine-tune** | 1,000,000 步 | 200,000 步 |
+| **Sell Fine-tune** | 300,000 步 | 100,000 步 |
+| **指令** | `python train_v3_models.py` | `python train_v4_models.py` |
+| **輸出目錄** | `models_hybrid_v3/` | `models_hybrid_v4/` |
+
+### 3. 每日維運 (Daily Operations)
+
+自動化腳本能完成「LSTM 重訓 → 特徵工程 → RL 推論 → 報告生成」全流程。
+
+- **雙策略比較 (推薦)**: 同時執行 V3 與 V4 模型並產生綜合建議。
+  ```bash
+  python daily_ops_dual.py
+  ```
+
+- **單策略運行**:
+  ```bash
+  python daily_ops_v3.py  # 僅 V3
+  python daily_ops_v4.py  # 僅 V4
+  ```
+
+**功能特點：**
+- 自動動態回推訓練資料 (T+1/2000天, T+5/2200天)
+- 自動解決 Lookahead Bias
+- 輸出 JSON 與 TXT 戰情報告 (`daily_runs_vX/YYYY-MM-DD/reports/`)
 
 ## 📈 訓練流程 (Training Pipeline)
 
@@ -235,22 +230,17 @@ tensorboard --logdir ./tensorboard_logs/
 - `results_hybrid/final_performance.png`: 績效圖表
 - `tensorboard_logs/`: 訓練過程日誌 (可用 TensorBoard 查看)
 
-## 🔧 參數設定 (Configuration)
+## 🔧 V3 vs V4 版本比較
 
-可在 `ptrl_hybrid_system.py` 修改關鍵參數：
-
-```python
-SPLIT_DATE = '2023-01-01'  # 訓練/測試 切分點
-
-# 預訓練參數
-TOTAL_TIMESTEPS_BUY = 1_000_000
-TOTAL_TIMESTEPS_SELL = 500_000
-
-# 微調參數 (Transfer Learning)
-FINETUNE_LR = 1e-5  # 原始學習率的 1/10
-FINETUNE_BUY_STEPS = 200_000
-FINETUNE_SELL_STEPS = 100_000
-```
+| 項目 | V3 (Standard) | V4 (Lightweight) | 原始版 (ptrl_hybrid_system.py) |
+|-----|---------------|------------------|--------------------------------|
+| **Pre-train Buy** | 1,000,000 | 1,000,000 | 1,000,000 |
+| **Pre-train Sell** | 500,000 | 500,000 | 500,000 |
+| **Fine-tune Buy** | **1,000,000** | **200,000** | 1,000,000 |
+| **Fine-tune Sell** | **300,000** | **100,000** | 300,000 |
+| **信心度門檻** | [0.0005, 0.0020] | [0.0005, 0.0020] | [0.005, 0.015] (舊版) |
+| **特徵快取** | 強制清除 | 強制清除 | 使用快取 (需手動清除) |
+| **模型路徑** | `models_hybrid_v3` | `models_hybrid_v4` | `models_hybrid` |
 
 ## 📚 參考文獻 (References)
 
