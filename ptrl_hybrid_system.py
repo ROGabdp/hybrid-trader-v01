@@ -588,14 +588,14 @@ def run_finetuning(twii_finetune_data: dict, twii_eval_data: dict, models_path: 
     
     # Callbacks
     buy_callbacks = CallbackList([
-        CheckpointCallback(save_freq=50000, save_path=models_path, name_prefix="ppo_buy_finetune"),
+        CheckpointCallback(save_freq=100000, save_path=models_path, name_prefix="ppo_buy_finetune"),
         EvalCallback(eval_buy_env, best_model_save_path=os.path.join(models_path, "best_tuned", "buy"),
-                     log_path="./logs/", eval_freq=5000, n_eval_episodes=30, 
+                     log_path="./logs/", eval_freq=10000, n_eval_episodes=30, 
                      deterministic=True)
     ])
     
-    print(f"[Fine-tune] Training Buy Agent for 200,000 steps (LR: {finetune_params['learning_rate']})")
-    buy_model.learn(total_timesteps=200_000, callback=buy_callbacks, 
+    print(f"[Fine-tune] Training Buy Agent for 1,000,000 steps (LR: {finetune_params['learning_rate']})")
+    buy_model.learn(total_timesteps=1_000_000, callback=buy_callbacks, 
                     tb_log_name="buy_finetune", reset_num_timesteps=False)
     
     buy_final_path = os.path.join(models_path, "ppo_buy_twii_final")
@@ -624,14 +624,14 @@ def run_finetuning(twii_finetune_data: dict, twii_eval_data: dict, models_path: 
     
     # Callbacks
     sell_callbacks = CallbackList([
-        CheckpointCallback(save_freq=25000, save_path=models_path, name_prefix="ppo_sell_finetune"),
+        CheckpointCallback(save_freq=50000, save_path=models_path, name_prefix="ppo_sell_finetune"),
         EvalCallback(eval_sell_env, best_model_save_path=os.path.join(models_path, "best_tuned", "sell"),
-                     log_path="./logs/", eval_freq=5000, n_eval_episodes=30, 
+                     log_path="./logs/", eval_freq=10000, n_eval_episodes=30, 
                      deterministic=True)
     ])
     
-    print(f"[Fine-tune] Training Sell Agent for 100,000 steps (LR: {finetune_params['learning_rate']})")
-    sell_model.learn(total_timesteps=100_000, callback=sell_callbacks, 
+    print(f"[Fine-tune] Training Sell Agent for 300,000 steps (LR: {finetune_params['learning_rate']})")
+    sell_model.learn(total_timesteps=300_000, callback=sell_callbacks, 
                      tb_log_name="sell_finetune", reset_num_timesteps=False)
     
     sell_final_path = os.path.join(models_path, "ppo_sell_twii_final")
