@@ -107,10 +107,21 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-### 已知問題排除
-如果執行腳本時出現權限錯誤，請先執行：
+### ⚡ GPU 加速設定 (重要)
+本專案建議使用 NVIDIA 顯卡進行訓練加速。
+
+**方法一：使用 setup_env.ps1 (自動)**
+腳本會自動安裝支援 CUDA 11.8 的 PyTorch 版本。
+
+**方法二：手動安裝**
+若您手動執行 `pip install -r requirements.txt`，預設會安裝 CPU 版本。請執行以下指令將其替換為 GPU 版本：
+
 ```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+# 1. 移除 CPU 版本
+pip uninstall torch torchvision torchaudio -y
+
+# 2. 安裝 GPU 版本 (CUDA 11.8)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ### 系統需求 (Dependencies)

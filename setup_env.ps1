@@ -20,9 +20,13 @@ Write-Host "正在啟動虛擬環境..." -ForegroundColor Cyan
 Write-Host "正在升級 pip..." -ForegroundColor Cyan
 python -m pip install --upgrade pip
 
+# Install GPU PyTorch (CUDA 11.8)
+Write-Host "正在安裝 PyTorch (GPU/CUDA 11.8)..." -ForegroundColor Cyan
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
 # Install requirements
 if (Test-Path "requirements.txt") {
-    Write-Host "正在安裝相依套件 (requirements.txt)..." -ForegroundColor Cyan
+    Write-Host "正在安裝其他相依套件 (requirements.txt)..." -ForegroundColor Cyan
     pip install -r requirements.txt
     Write-Host "✅ 安裝完成！" -ForegroundColor Green
 } else {
