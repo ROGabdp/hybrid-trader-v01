@@ -8,6 +8,8 @@ saved_models_multivariate/*.keras
 saved_models_multivariate/*.pkl
 saved_models_5d/*.keras
 saved_models_5d/*.pkl
+results_hybrid/
+models_hybrid_backup_roi85/
 
 # =============================================================================
 # Data Cache
