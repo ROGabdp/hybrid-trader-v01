@@ -10,6 +10,7 @@ saved_models_5d/*.keras
 saved_models_5d/*.pkl
 results_hybrid/
 models_hybrid_backup_roi85/
+models_hybrid_v2_conservative/
 
 # =============================================================================
 # Data Cache
