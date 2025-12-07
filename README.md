@@ -185,6 +185,33 @@ python ptrl_hybrid_system.py
 - 微調：針對 ^TWII (2000-2022) 進行訓練，Learning Rate = 1e-5
 - 回測：驗證數據集 (2023-Present)
 
+### Phase 5: 訓練監控 (Training Monitoring)
+本系統整合了 **TensorBoard** 進行訓練過程的即時監控。
+
+**自動記錄的指標：**
+- `rollout/ep_rew_mean`: 平均獎勵
+- `train/loss`: 總損失
+- `train/policy_gradient_loss`: 策略梯度損失
+- `train/value_loss`: 價值函數損失
+- `train/entropy_loss`: 熵損失
+- `eval/mean_reward`: 驗證集平均獎勵 (EvalCallback)
+
+**如何使用 TensorBoard：**
+```powershell
+# 在專案目錄下執行
+tensorboard --logdir ./tensorboard_logs/
+
+# 然後開啟瀏覽器前往
+# http://localhost:6006
+```
+
+**日誌存放位置：**
+- `./tensorboard_logs/`: TensorBoard 日誌
+- `./logs/`: EvalCallback 評估結果
+- `models_hybrid/best_tuned/`: 驗證集最佳模型
+
+---
+
 ## 📊 輸出結果 (Output)
 
 執行 `ptrl_hybrid_system.py` 後，您將獲得：
@@ -192,6 +219,7 @@ python ptrl_hybrid_system.py
 - `models_hybrid/ppo_buy_twii_final.zip`: 微調後的 Buy Model
 - `models_hybrid/ppo_sell_twii_final.zip`: 微調後的 Sell Model
 - `results_hybrid/final_performance.png`: 績效圖表
+- `tensorboard_logs/`: 訓練過程日誌 (可用 TensorBoard 查看)
 
 ## 🔧 參數設定 (Configuration)
 
