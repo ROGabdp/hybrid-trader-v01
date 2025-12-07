@@ -10,8 +10,12 @@ models_hybrid_backup_roi85/
 models_hybrid_v2_conservative/
 saved_models_multivariate/*.keras
 saved_models_multivariate/*.pkl
+saved_models_multivariate/*.json
+saved_models_multivariate/*.png
 saved_models_5d/*.keras
 saved_models_5d/*.pkl
+saved_models_5d/*.json
+saved_models_5d/*.png
 results_hybrid/
 results_hybrid_v3/
 results_hybrid_v4/
