@@ -81,19 +81,28 @@ def create_daily_workspace(date_str: str) -> dict:
 
 
 # =============================================================================
-# Step 1: LSTM 全量重訓與封存
+# Step 1: LSTM 全量重訓與封存 (v2.3 - 動態天數 + 全量學習)
 # =============================================================================
 def train_and_archive_lstm(workspace: dict, end_date: str):
     print("\n" + "=" * 60)
     print("📚 Step 1: LSTM 全量重訓與封存")
     print("=" * 60)
     
-    start_date = "2000-01-01"
+    # [v2.3] 動態計算起始日期
+    # T+5 模型：使用過去 2200 天（約 2020-01 起）- 捕捉更長趨勢
+    # T+1 模型：使用過去 2000 天（約 2020-07 起）- 專注近期市場
+    end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+    start_5d = (end_dt - timedelta(days=2200)).strftime('%Y-%m-%d')
+    start_1d = (end_dt - timedelta(days=2000)).strftime('%Y-%m-%d')
     
-    # 1. 執行 T+5 訓練 (傳入動態日期)
-    print(f"\n[Training] T+5 Model ({start_date} ~ {end_date})...")
+    # [v2.3] 啟用全量學習：split_ratio = 0.99
+    # 只保留 1% 作為 Early Stopping 監控，確保模型學習到最新資料
+    split_ratio = "0.99"
+    
+    # 1. 執行 T+5 訓練 (傳入動態日期 + split_ratio)
+    print(f"\n[Training] T+5 Model ({start_5d} ~ {end_date}, split={split_ratio})...")
     script_5d_path = os.path.join(PROJECT_PATH, SCRIPT_5D)
-    cmd_5d = [sys.executable, script_5d_path, "train", "--start", start_date, "--end", end_date]
+    cmd_5d = [sys.executable, script_5d_path, "train", "--start", start_5d, "--end", end_date, "--split_ratio", split_ratio]
     try:
         subprocess.run(cmd_5d, check=True, timeout=1200, cwd=PROJECT_PATH)  # 確保工作目錄正確
         print("[Training] ✅ T+5 訓練完成")
@@ -107,10 +116,10 @@ def train_and_archive_lstm(workspace: dict, end_date: str):
         print(f"[Error] 執行錯誤: {e}")
         return False
 
-    # 2. 執行 T+1 訓練 (傳入動態日期)
-    print(f"\n[Training] T+1 Model ({start_date} ~ {end_date})...")
+    # 2. 執行 T+1 訓練 (傳入動態日期 + split_ratio)
+    print(f"\n[Training] T+1 Model ({start_1d} ~ {end_date}, split={split_ratio})...")
     script_1d_path = os.path.join(PROJECT_PATH, SCRIPT_1D)
-    cmd_1d = [sys.executable, script_1d_path, "train", "--start", start_date, "--end", end_date]
+    cmd_1d = [sys.executable, script_1d_path, "train", "--start", start_1d, "--end", end_date, "--split_ratio", split_ratio]
     try:
         subprocess.run(cmd_1d, check=True, timeout=1200, cwd=PROJECT_PATH)
         print("[Training] ✅ T+1 訓練完成")

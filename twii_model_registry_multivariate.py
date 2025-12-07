@@ -680,6 +680,7 @@ def train_mode(args):
     print(f"[設定] Lookback: {LOOKBACK} | LSTM Units: {LSTM_UNITS}")
     print(f"[設定] Epochs: {EPOCHS} | Batch Size: {BATCH_SIZE}")
     print(f"[設定] KD 參數: {KD_PARAMS} | MACD 參數: {MACD_PARAMS}")
+    print(f"[設定] Split Ratio: {args.split_ratio} (訓練集比例)")
     
     # 設定隨機種子
     np.random.seed(42)
@@ -688,8 +689,8 @@ def train_mode(args):
     # 1. 下載資料
     df = download_data_by_date_range(start_date, end_date)
     
-    # 2. 預處理（含技術指標計算）
-    X_train, y_train, X_test, y_test, feature_scaler, target_scaler, price_min, price_max, n_features = preprocess_for_training(df)
+    # 2. 預處理（含技術指標計算）- 使用指定的 split_ratio
+    X_train, y_train, X_test, y_test, feature_scaler, target_scaler, price_min, price_max, n_features = preprocess_for_training(df, train_ratio=args.split_ratio)
     
     # 3. 建立模型
     print("\n[模型] 建立 LSTM-SSAM 多變量模型...")
@@ -932,6 +933,12 @@ def main():
         type=str,
         required=True,
         help='訓練資料結束日期 (YYYY-MM-DD)'
+    )
+    train_parser.add_argument(
+        '--split_ratio',
+        type=float,
+        default=0.9,
+        help='訓練集比例 (預設 0.9，每日維運建議使用 0.99 以學習最新數據)'
     )
     
     # predict 子命令
