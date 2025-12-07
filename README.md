@@ -1,28 +1,28 @@
 # 🚀 Hybrid Trading System for Taiwan Stock Index (^TWII)
 
-A sophisticated algorithmic trading system that combines **LSTM-SSAM** (Long Short-Term Memory with Sequential Self-Attention) for price prediction with **Pro Trader RL** (Reinforcement Learning) for trading decisions.
+這是一個先進的演算法交易系統，結合了用於價格預測的 **LSTM-SSAM** (Long Short-Term Memory with Sequential Self-Attention) 以及用於交易決策的 **Pro Trader RL** (Reinforcement Learning)。
 
-## ✨ Key Features
+## ✨ 核心特色 (Key Features)
 
-| Feature | Description |
+| 特色 | 說明 |
 |---------|-------------|
-| **LSTM-SSAM Prediction** | T+1 and T+5 price prediction with MC Dropout uncertainty estimation |
-| **Transfer Learning** | Pre-train on global indices → Fine-tune for ^TWII |
-| **Feature Fusion** | 23 features including LSTM predictions and confidence scores |
-| **PPO Agent** | Separate Buy and Sell agents with class balancing |
-| **Backtesting** | Full simulation with stop-loss and performance metrics |
+| **LSTM-SSAM 預測** | T+1 與 T+5 價格預測，並使用 MC Dropout 進行不確定性估計 |
+| **遷移學習 (Transfer Learning)** | 使用全球指數進行預訓練 (Pre-train) → 針對 ^TWII 進行微調 (Fine-tune) |
+| **特徵融合 (Feature Fusion)** | 整合 23 種特徵，包含 LSTM 預測值與信心分數 |
+| **PPO Agent** | 分離的買入 (Buy) 與賣出 (Sell) 代理人，並具備類別平衡機制 |
+| **回測 (Backtesting)** | 完整的模擬回測，包含停損機制與績效指標計算 |
 
-## 📊 Performance Results (2023-Present)
+## 📊 績效結果 (2023-Present)
 
-| Metric | Value |
+| 指標 (Metric) | 數值 (Value) |
 |--------|-------|
-| **Total Return (ROI)** | 85.49% |
-| **Annualized Return** | 23.53% |
-| **Sharpe Ratio** | 1.47 |
-| **Max Drawdown** | -17.23% |
-| **Win Rate** | 100% (5 trades) |
+| **總報酬率 (ROI)** | 85.49% |
+| **年化報酬率 (Annualized Return)** | 23.53% |
+| **夏普值 (Sharpe Ratio)** | 1.47 |
+| **最大回撤 (Max Drawdown)** | -17.23% |
+| **勝率 (Win Rate)** | 100% (5 次交易) |
 
-## 🏗️ Architecture
+## 🏗️ 系統架構 (Architecture)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -30,14 +30,14 @@ A sophisticated algorithmic trading system that combines **LSTM-SSAM** (Long Sho
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
-│  │  LSTM T+1    │    │  LSTM T+5    │    │  Technical       │  │
-│  │  Prediction  │    │  + MC Dropout│    │  Indicators      │  │
+│  │  LSTM T+1    │    │  LSTM T+5    │    │    技術指標       │  │
+│  │   預測模型    │    │  + MC Dropout│    │  (Indicators)    │  │
 │  └──────┬───────┘    └──────┬───────┘    └────────┬─────────┘  │
 │         │                   │                      │            │
 │         └───────────────────┼──────────────────────┘            │
 │                             │                                    │
 │                    ┌────────▼────────┐                          │
-│                    │  23 Features    │                          │
+│                    │    23 特徵融合   │                          │
 │                    │  (Feature Fusion)│                         │
 │                    └────────┬────────┘                          │
 │                             │                                    │
@@ -51,52 +51,52 @@ A sophisticated algorithmic trading system that combines **LSTM-SSAM** (Long Sho
 │         └──────────────────┬───────────────────┘                │
 │                            │                                     │
 │                   ┌────────▼────────┐                           │
-│                   │  Trading Signal │                           │
+│                   │    交易訊號      │                           │
 │                   └─────────────────┘                           │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 📁 Project Structure
+## 📁 專案結構 (Project Structure)
 
 ```
 hybrid-trader-v01/
-├── ptrl_hybrid_system.py        # Main hybrid system (all-in-one)
-├── train_lstm_models.py         # LSTM model training script
-├── twii_model_registry_5d.py    # T+5 LSTM model registry
-├── twii_model_registry_multivariate.py  # T+1 LSTM model registry
-├── trade_advisor.py             # Trading advice generator
-├── ptrl_TW50_split_train.py     # Reference: Original RL training
-├── ptrl_TW50_paper_version.py   # Reference: Paper implementation
+├── ptrl_hybrid_system.py        # 混合交易系統主程式 (All-in-one)
+├── train_lstm_models.py         # LSTM 模型訓練腳本
+├── twii_model_registry_5d.py    # T+5 LSTM 模型註冊管理
+├── twii_model_registry_multivariate.py  # T+1 LSTM 模型註冊管理
+├── trade_advisor.py             # 交易建議生成器
+├── ptrl_TW50_split_train.py     # 參考：原始 RL 訓練程式
+├── ptrl_TW50_paper_version.py   # 參考：論文實作版本
 │
-├── models_hybrid/               # Trained RL models
-│   ├── ppo_buy_base.zip         # Pre-trained Buy agent
-│   ├── ppo_sell_base.zip        # Pre-trained Sell agent
-│   ├── ppo_buy_twii_final.zip   # Fine-tuned Buy agent
-│   └── ppo_sell_twii_final.zip  # Fine-tuned Sell agent
+├── models_hybrid/               # 訓練好的 RL 模型
+│   ├── ppo_buy_base.zip         # 預訓練 Buy Agent
+│   ├── ppo_sell_base.zip        # 預訓練 Sell Agent
+│   ├── ppo_buy_twii_final.zip   # 微調後 Buy Agent (^TWII)
+│   └── ppo_sell_twii_final.zip  # 微調後 Sell Agent (^TWII)
 │
-├── saved_models_multivariate/   # T+1 LSTM models
-├── saved_models_5d/             # T+5 LSTM models
+├── saved_models_multivariate/   # T+1 LSTM 模型存檔
+├── saved_models_5d/             # T+5 LSTM 模型存檔
 │
-├── data/processed/              # Feature cache
+├── data/processed/              # 特徵快取資料
 │   └── *_features.pkl
 │
-└── results_hybrid/              # Backtest results
+└── results_hybrid/              # 回測結果
     └── final_performance.png
 ```
 
-## 🛠️ Installation
+## 🛠️ 安裝說明 (Installation)
 
 ```bash
-# Clone the repository
+# 複製專案
 git clone https://github.com/YOUR_USERNAME/hybrid-trader-v01.git
 cd hybrid-trader-v01
 
-# Install dependencies
+# 安裝相依套件
 pip install -r requirements.txt
 ```
 
-### Dependencies
+### 系統需求 (Dependencies)
 
 ```
 tensorflow>=2.10
@@ -112,87 +112,87 @@ matplotlib
 psutil
 ```
 
-## 🚀 Quick Start
+## 🚀 快速開始 (Quick Start)
 
-### 1. Train LSTM Models (Long-Period)
+### 1. 訓練 LSTM 模型 (長週期)
 
 ```bash
 python train_lstm_models.py
 ```
 
-This trains LSTM T+1 and T+5 models on 2000-2023 data.
+此步驟將使用 2000-2023 年的數據訓練 LSTM T+1 與 T+5 模型。
 
-### 2. Run Full Pipeline
+### 2. 執行完整流程 (Full Pipeline)
 
 ```bash
 python ptrl_hybrid_system.py
 ```
 
-This will:
-1. **Phase 1-3**: Pre-train RL agents on 5 global indices (if not already done)
-2. **Phase 4**: Fine-tune for ^TWII and run backtesting
+此指令將執行：
+1. **Phase 1-3**: 使用 5 個全球指數預訓練 RL Agent (如果尚未完成)
+2. **Phase 4**: 針對 ^TWII 進行微調 (Fine-tune) 並執行回測
 
-## 📈 Training Pipeline
+## 📈 訓練流程 (Training Pipeline)
 
-### Phase 1: Data Expansion
-- Download 5 global indices: ^TWII, ^GSPC, ^IXIC, ^SOX, ^DJI
-- Date range: 2000-01-01 ~ Present
+### Phase 1: 數據擴充 (Data Expansion)
+- 下載 5 個全球指數：^TWII, ^GSPC, ^IXIC, ^SOX, ^DJI
+- 數據範圍：2000-01-01 ~ Present
 
-### Phase 2: Feature Engineering
-- 23 features including:
-  - Normalized OHLC prices
-  - Donchian Channel, SuperTrend
-  - Heikin-Ashi patterns
-  - RSI, MFI, ATR
-  - Relative Strength metrics
-  - **LSTM_Pred_1d**: T+1 prediction
-  - **LSTM_Pred_5d**: T+5 prediction
-  - **LSTM_Conf_5d**: T+5 confidence (MC Dropout)
+### Phase 2: 特徵工程 (Feature Engineering)
+- 包含 23 種特徵：
+  - 標準化 OHLC 價格
+  - 唐奇安通道 (Donchian Channel)、超級趨勢 (SuperTrend)
+  - 平均K線 (Heikin-Ashi) 型態
+  - RSI, MFI, ATR 指標
+  - 相對強度 (Relative Strength) 指標
+  - **LSTM_Pred_1d**: T+1 預測漲幅
+  - **LSTM_Pred_5d**: T+5 預測漲幅
+  - **LSTM_Conf_5d**: T+5 信心度 (MC Dropout)
 
-### Phase 3: Pre-training
-- Buy Agent: 1,000,000 steps (class-balanced sampling)
-- Sell Agent: 500,000 steps
+### Phase 3: 預訓練 (Pre-training)
+- Buy Agent: 1,000,000 步 (類別平衡採樣)
+- Sell Agent: 500,000 步
 
-### Phase 4: Fine-tuning & Backtesting
-- Fine-tune on ^TWII (2000-2022) with LR=1e-5
-- Backtest on (2023-Present)
+### Phase 4: 微調與回測 (Fine-tuning & Backtesting)
+- 微調：針對 ^TWII (2000-2022) 進行訓練，Learning Rate = 1e-5
+- 回測：驗證數據集 (2023-Present)
 
-## 📊 Output
+## 📊 輸出結果 (Output)
 
-After running `ptrl_hybrid_system.py`, you'll get:
+執行 `ptrl_hybrid_system.py` 後，您將獲得：
 
-- `models_hybrid/ppo_buy_twii_final.zip`: Fine-tuned Buy model
-- `models_hybrid/ppo_sell_twii_final.zip`: Fine-tuned Sell model
-- `results_hybrid/final_performance.png`: Performance chart
+- `models_hybrid/ppo_buy_twii_final.zip`: 微調後的 Buy Model
+- `models_hybrid/ppo_sell_twii_final.zip`: 微調後的 Sell Model
+- `results_hybrid/final_performance.png`: 績效圖表
 
-## 🔧 Configuration
+## 🔧 參數設定 (Configuration)
 
-Key parameters in `ptrl_hybrid_system.py`:
+可在 `ptrl_hybrid_system.py` 修改關鍵參數：
 
 ```python
-SPLIT_DATE = '2023-01-01'  # Train/Test split
+SPLIT_DATE = '2023-01-01'  # 訓練/測試 切分點
 
-# Pre-training
+# 預訓練參數
 TOTAL_TIMESTEPS_BUY = 1_000_000
 TOTAL_TIMESTEPS_SELL = 500_000
 
-# Fine-tuning (Transfer Learning)
-FINETUNE_LR = 1e-5  # 1/10 of original
+# 微調參數 (Transfer Learning)
+FINETUNE_LR = 1e-5  # 原始學習率的 1/10
 FINETUNE_BUY_STEPS = 200_000
 FINETUNE_SELL_STEPS = 100_000
 ```
 
-## 📚 References
+## 📚 參考文獻 (References)
 
 - **Pro Trader RL**: [Paper Implementation](https://arxiv.org/abs/xxxx)
 - **LSTM-SSAM**: Sequential Self-Attention for time series prediction
 - **MC Dropout**: Uncertainty estimation via Monte Carlo Dropout
 
-## 📄 License
+## 📄 授權 (License)
 
 MIT License
 
-## 👤 Author
+## 👤 作者 (Author)
 
 Phil Liang
 
