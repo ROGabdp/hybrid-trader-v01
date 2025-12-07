@@ -236,14 +236,19 @@ def add_lstm_features(df: pd.DataFrame, ticker: str = "Unknown") -> pd.DataFrame
         batch_5d = [scaled_5d[i - lookback_5d:i] for i in range(lookback_5d, n)]
         if batch_5d:
             batch_5d = np.array(batch_5d)
+            # [v2.3] MC Dropout 採樣：5 → 30 次 (提升統計顯著性)
             mc_results = [scaler_tgt_5d.inverse_transform(
-                model_5d(batch_5d, training=True).numpy()).flatten() for _ in range(5)]
+                model_5d(batch_5d, training=True).numpy()).flatten() for _ in range(30)]
             mc_mean, mc_std = np.mean(mc_results, axis=0), np.std(mc_results, axis=0)
             for j, idx in enumerate(range(lookback_5d, n)):
                 if close_prices[idx] > 0:
                     pred_5d[idx] = (mc_mean[j] - close_prices[idx]) / close_prices[idx]
                     cv = mc_std[j] / mc_mean[j] if mc_mean[j] > 0 else 0.1
-                    conf_5d[idx] = max(0.0, min(1.0, 1.0 - (cv - 0.005) / 0.015))
+                    # [v2.3] 收緊信心度門檻 (適應 Dropout=0.05)
+                    # threshold_high = 0.0005 (CV <= 0.05% 為滿分 1.0)
+                    # threshold_low = 0.0020 (CV >= 0.20% 為零分 0.0)
+                    score = 1.0 - (cv - 0.0005) / (0.0020 - 0.0005)
+                    conf_5d[idx] = np.clip(score, 0.0, 1.0)
     except:
         pass
     

@@ -4,14 +4,20 @@
 # Model Files (Large Binaries)
 # =============================================================================
 models_hybrid/*.zip
+models_hybrid_v3/
+models_hybrid_v4/
+models_hybrid_backup_roi85/
+models_hybrid_v2_conservative/
 saved_models_multivariate/*.keras
 saved_models_multivariate/*.pkl
 saved_models_5d/*.keras
 saved_models_5d/*.pkl
 results_hybrid/
-models_hybrid_backup_roi85/
-models_hybrid_v2_conservative/
+results_hybrid_v3/
+results_hybrid_v4/
 daily_runs/
+daily_runs_v3/
+daily_runs_v4/
 
 # =============================================================================
 # Data Cache
