@@ -83,6 +83,52 @@ def parse_args():
     return parser.parse_args()
 
 
+def load_lstm_models_for_backtest(cutoff_date):
+    """
+    載入 LSTM 模型，使用指定的 cutoff_date 進行模型選擇
+    
+    這確保選擇的模型 train_end < cutoff_date，避免回測時的資料洩漏
+    
+    Args:
+        cutoff_date: date object，模型的 train_end 必須早於此日期
+    """
+    import ptrl_hybrid_system as hybrid
+    import twii_model_registry_multivariate as lstm_1d_module
+    import twii_model_registry_5d as lstm_5d_module
+    
+    print(f"\n[LSTM] Loading models with cutoff_date: {cutoff_date}")
+    print(f"[LSTM] Only models with train_end < {cutoff_date} will be considered")
+    
+    # 使用 cutoff_date 選擇模型 (而非 date.today())
+    meta_1d = lstm_1d_module.select_best_model(cutoff_date)
+    if meta_1d is None:
+        print("[Error] No valid T+1 model found")
+        return False
+    
+    model_1d, scaler_feat_1d, scaler_tgt_1d, _ = lstm_1d_module.load_artifacts(
+        meta_1d['train_start'], meta_1d['train_end'])
+    print(f"  T+1 Model: {meta_1d['train_start']} ~ {meta_1d['train_end']}")
+    
+    meta_5d = lstm_5d_module.select_best_model(cutoff_date)
+    if meta_5d is None:
+        print("[Error] No valid T+5 model found")
+        return False
+    
+    model_5d, scaler_feat_5d, scaler_tgt_5d, _ = lstm_5d_module.load_artifacts(
+        meta_5d['train_start'], meta_5d['train_end'])
+    print(f"  T+5 Model: {meta_5d['train_start']} ~ {meta_5d['train_end']}")
+    
+    # 注入到 hybrid 模組的全域變數
+    hybrid._LSTM_MODELS.update({
+        'model_1d': model_1d, 'scaler_feat_1d': scaler_feat_1d,
+        'scaler_tgt_1d': scaler_tgt_1d, 'meta_1d': meta_1d,
+        'model_5d': model_5d, 'scaler_feat_5d': scaler_feat_5d,
+        'scaler_tgt_5d': scaler_tgt_5d, 'meta_5d': meta_5d, 'loaded': True
+    })
+    
+    return True
+
+
 # =============================================================================
 # DCA + AI Hybrid 回測器
 # =============================================================================
@@ -464,7 +510,10 @@ def main():
     print("\n[Data] Loading data...")
     import ptrl_hybrid_system as hybrid
     
-    hybrid.load_best_lstm_models()
+    # 使用回測 start_date 來選擇 LSTM 模型 (避免資料洩漏)
+    if not load_lstm_models_for_backtest(start_date.date()):
+        print("[Error] Failed to load LSTM models")
+        sys.exit(1)
     
     cache_path = os.path.join(CACHE_DIR, "_TWII_features.pkl")
     if os.path.exists(cache_path):

@@ -228,6 +228,19 @@ results_backtest_v4_dca_hybrid_no_filter/
 └── trades_v4_dca_hybrid_no_filter_20240102_20251205.csv
 ```
 
+### 🔍 回測腳本功能比較
+
+| 功能 | `backtest_v3_no_filter.py` | `backtest_v4_no_filter.py` | `backtest_v4_dca_hybrid_no_filter.py` |
+|------|:---:|:---:|:---:|
+| 自訂日期範圍 | ✅ | ✅ | ✅ |
+| 動態檔名 | ✅ | ✅ | ✅ |
+| Benchmark 比較 | ✅ | ✅ | ✅ |
+| DCA + AI 混合策略 | ❌ | ❌ | ✅ |
+| **LSTM 模型日期篩選** | ❌ | ❌ | ✅ |
+
+> [!IMPORTANT]
+> **LSTM 模型日期篩選**：只有 `backtest_v4_dca_hybrid_no_filter.py` 會根據回測 start_date 來選擇 LSTM 模型，確保只使用 `train_end < start_date` 的模型，避免資料洩漏 (look-ahead bias)。其他兩個腳本使用當天日期選擇模型。
+
 ## 📈 訓練流程 (Training Pipeline)
 
 ### Phase 1: 數據擴充 (Data Expansion)
