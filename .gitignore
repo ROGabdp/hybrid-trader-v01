@@ -19,6 +19,8 @@ saved_models_5d/*.png
 results_hybrid/
 results_hybrid_v3/
 results_hybrid_v4/
+results_backtest_v3_no_filter/
+results_backtest_v4_no_filter/
 daily_runs/
 daily_runs_v3/
 daily_runs_v4/

@@ -257,11 +257,11 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
 
 
 # =============================================================================
-# Step 3: 雙模型推論 (修正版 - 解決 CUDA Tensor Error)
+# Step 3: 雙模型推論 (v2.4 - 濾網 + 情境分析)
 # =============================================================================
 def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     print("\n" + "=" * 60)
-    print("🎯 Step 3: 雙模型推論")
+    print("🎯 Step 3: 雙模型推論 (含濾網與情境分析)")
     print("=" * 60)
     
     from stable_baselines3 import PPO
@@ -269,6 +269,10 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     # 準備特徵
     FEATURE_COLS = core_system.FEATURE_COLS
     latest = df.iloc[-1]
+    
+    # [v2.4] 獲取濾網狀態
+    signal_buy_filter = bool(latest.get('Signal_Buy_Filter', False))
+    print(f"  [濾網] Signal_Buy_Filter = {signal_buy_filter}")
     
     # 確保特徵欄位對齊
     features = []
@@ -280,7 +284,14 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
     # 處理 NaN/Inf
     features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
     
-    results = {}
+    results = {'filter_status': signal_buy_filter}
+    
+    # [v2.4] 三種持倉情境
+    SELL_SCENARIOS = {
+        'cost': 1.00,    # 成本區 (剛進場)
+        'profit': 1.10,  # 獲利中 (+10%)
+        'loss': 0.95,    # 虧損中 (-5%)
+    }
     
     def run_strategy(name, path, key):
         buy_path = os.path.join(path, 'ppo_buy_twii_final.zip')
@@ -295,34 +306,51 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
             buy_agent = PPO.load(buy_path)
             sell_agent = PPO.load(sell_path)
             
-            # Buy Action
+            # =====================================================================
+            # Buy Logic (v2.5 - 全時推論 + 狀態標記)
+            # =====================================================================
+            # 步驟 A: 無論濾網狀態，一律執行 AI 預測
             b_act, _ = buy_agent.predict(features, deterministic=True)
-            # Buy Probability
             b_obs = buy_agent.policy.obs_to_tensor(features)[0]
-            # [修正] 加上 .cpu() 再轉 numpy
             b_prob = buy_agent.policy.get_distribution(b_obs).distribution.probs.detach().cpu().numpy()[0]
             
-            # Sell Action (Construct Sell State: Features + [Current_Return=1.0])
-            s_feat = np.concatenate([features[0], [1.0]]).reshape(1, -1)
-            s_act, _ = sell_agent.predict(s_feat, deterministic=True)
+            ai_action = 'BUY' if b_act[0] == 1 else 'WAIT'
+            buy_prob = float(b_prob[1]) if b_act[0] == 1 else float(b_prob[0])
             
-            # Sell Probability (Optionally capture probability if needed)
-            # s_obs = sell_agent.policy.obs_to_tensor(s_feat)[0]
-            # s_prob = sell_agent.policy.get_distribution(s_obs).distribution.probs.detach().cpu().numpy()[0]
+            # 步驟 B: 根據濾網狀態決定最終顯示字串
+            if signal_buy_filter:
+                # 濾網通過
+                buy_signal = ai_action  # "BUY" 或 "WAIT"
+            else:
+                # 濾網未過：標記為 FILTERED 但顯示 AI 原始判斷
+                buy_signal = f"FILTERED (AI: {ai_action})"
+            
+            print(f"  [{name}] Buy: {buy_signal} ({buy_prob:.1%})")
+            
+            # =====================================================================
+            # Sell Logic (情境分析) - 保持不變
+            # =====================================================================
+            sell_scenarios = {}
+            for scenario_name, return_value in SELL_SCENARIOS.items():
+                s_feat = np.concatenate([features[0], [return_value]]).reshape(1, -1)
+                s_act, _ = sell_agent.predict(s_feat, deterministic=True)
+                sell_scenarios[scenario_name] = 'SELL' if s_act[0] == 1 else 'HOLD'
+            
+            print(f"  [{name}] Sell: 成本={sell_scenarios['cost']} | 獲利={sell_scenarios['profit']} | 虧損={sell_scenarios['loss']}")
             
             results[key] = {
                 'name': name,
-                'buy_signal': 'BUY' if b_act[0] == 1 else 'WAIT',
-                'buy_prob': float(b_prob[1]) if b_act[0] == 1 else float(b_prob[0]),
-                'sell_signal': 'SELL' if s_act[0] == 1 else 'HOLD'
+                'buy_signal': buy_signal,
+                'buy_prob': buy_prob,
+                'ai_action': ai_action,  # 新增：AI 原始判斷
+                'sell_scenarios': sell_scenarios,
             }
-            print(f"  [{name}] Buy: {results[key]['buy_signal']} ({results[key]['buy_prob']:.1%}) | Sell: {results[key]['sell_signal']}")
             
         except Exception as e:
             results[key] = {'error': str(e)}
             print(f"  [Error] {name}: {e}")
             import traceback
-            traceback.print_exc() # 印出詳細錯誤以便除錯
+            traceback.print_exc()
 
     # 執行 A (V3)
     run_strategy("V3 (Fine-tune 1M)", STRATEGY_A_PATH, 'A')
@@ -334,54 +362,100 @@ def dual_inference(workspace: dict, df: pd.DataFrame) -> dict:
 
 
 # =============================================================================
-# Step 4: 輸出報告
+# Step 4: 輸出報告 (v2.4 - 濾網 + 情境分析)
 # =============================================================================
 def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str):
     print("\n" + "=" * 60)
-    print("📊 Step 4: 戰情儀表板")
+    print("📊 Step 4: 戰情儀表板 (v2.4)")
     print("=" * 60)
     
     last = df.iloc[-1]
+    filter_status = res.get('filter_status', False)
     
     lines = []
+    lines.append("=" * 50)
     lines.append(f"📅 日期: {date_str}")
+    lines.append("=" * 50)
     lines.append(f"📊 收盤: {last['Close']:.2f} | 量: {last['Volume']/1e8:.2f}億")
-    lines.append("-" * 40)
-    lines.append("🔮 [分析師 LSTM]")
+    lines.append("-" * 50)
+    
+    # 濾網狀態
+    filter_icon = "✅" if filter_status else "🚫"
+    filter_text = "通過 (Donchian 突破)" if filter_status else "未通過 (非突破日)"
+    lines.append(f"� [濾網狀態] {filter_icon} {filter_text}")
+    lines.append("-" * 50)
+    
+    # LSTM
+    lines.append("�🔮 [分析師 LSTM]")
     lines.append(f"   T+1 漲跌: {last.get('LSTM_Pred_1d', 0)*100:+.2f}%")
     lines.append(f"   T+5 漲跌: {last.get('LSTM_Pred_5d', 0)*100:+.2f}%")
     lines.append(f"   信心度:   {last.get('LSTM_Conf_5d', 0)*100:.1f}%")
-    lines.append("-" * 40)
+    lines.append("-" * 50)
+    
+    # RL 策略 (含情境分析)
     lines.append("🤖 [操盤手 RL]")
     
-    if 'A' in res and 'error' not in res['A']:
-        r = res['A']
-        icon = "🚀" if r['buy_signal'] == 'BUY' else "💤"
-        lines.append(f"   {icon} 策略 V3: [{r['buy_signal']}] (機率 {r['buy_prob']:.1%})")
-    
-    if 'B' in res and 'error' not in res['B']:
-        r = res['B']
-        icon = "🛡️" if r['buy_signal'] == 'BUY' else "💤"
-        lines.append(f"   {icon} 策略 V4: [{r['buy_signal']}] (機率 {r['buy_prob']:.1%})")
+    def format_strategy(key, label):
+        if key not in res or 'error' in res[key]:
+            return [f"   {label}: ❌ 模型載入失敗"]
         
-    # 綜合建議
-    lines.append("-" * 40)
-    sig_a = res.get('A', {}).get('buy_signal', 'N/A')
-    sig_b = res.get('B', {}).get('buy_signal', 'N/A')
+        r = res[key]
+        result_lines = []
+        
+        # Buy (v2.5 全時推論格式)
+        buy_signal = r['buy_signal']
+        buy_prob = r['buy_prob']
+        
+        if buy_signal == 'BUY':
+            buy_icon = "🚀"
+        elif buy_signal == 'WAIT':
+            buy_icon = "💤"
+        elif 'FILTERED' in buy_signal:
+            buy_icon = "🚫"
+        else:
+            buy_icon = "❓"
+        
+        result_lines.append(f"   🛒 {label} 買入: {buy_icon} {buy_signal} ({buy_prob:.1%})")
+        
+        # Sell (情境矩陣)
+        ss = r.get('sell_scenarios', {})
+        result_lines.append(f"   📦 {label} 賣出:")
+        result_lines.append(f"      ├─ 成本區 (0%):  {ss.get('cost', 'N/A')}")
+        result_lines.append(f"      ├─ 獲利中 (+10%): {ss.get('profit', 'N/A')}")
+        result_lines.append(f"      └─ 虧損中 (-5%):  {ss.get('loss', 'N/A')}")
+        
+        return result_lines
     
-    if sig_a == 'BUY' and sig_b == 'BUY':
-        advice = "⭐⭐ V3+V4 全買進 (Strong Buy) ⭐⭐"
-    elif sig_a == 'WAIT' and sig_b == 'WAIT':
+    lines.extend(format_strategy('A', 'V3'))
+    lines.append("")
+    lines.extend(format_strategy('B', 'V4'))
+    lines.append("-" * 50)
+    
+    # 綜合建議 (使用 ai_action 而非 buy_signal 判斷 AI 意圖)
+    ai_a = res.get('A', {}).get('ai_action', 'N/A')
+    ai_b = res.get('B', {}).get('ai_action', 'N/A')
+    
+    if not filter_status:
+        # 濾網未過，但顯示 AI 想法
+        if ai_a == 'BUY' and ai_b == 'BUY':
+            advice = "🚫 濾網攔截 | AI 意圖: 雙買進 (被擋下)"
+        elif ai_a == 'BUY' or ai_b == 'BUY':
+            advice = "🚫 濾網攔截 | AI 意圖: 有意買進 (被擋下)"
+        else:
+            advice = "🚫 濾網攔截 | AI 意圖: 觀望"
+    elif ai_a == 'BUY' and ai_b == 'BUY':
+        advice = "⭐⭐ V3+V4 雙買進 (Strong Buy) ⭐⭐"
+    elif ai_a == 'WAIT' and ai_b == 'WAIT':
         advice = "💤 空手觀望 (Wait)"
-    elif sig_a == 'BUY':
+    elif ai_a == 'BUY':
         advice = "⚠️ 僅 V3 買進 (V3 Only)"
-    elif sig_b == 'BUY':
+    elif ai_b == 'BUY':
         advice = "⚠️ 僅 V4 買進 (V4 Only)"
     else:
         advice = "❓ 訊號不明"
         
     lines.append(f"💡 綜合建議: {advice}")
-    lines.append("=" * 60)
+    lines.append("=" * 50)
     
     report = "\n".join(lines)
     print(report)
@@ -391,11 +465,12 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str)
     with open(txt_path, 'w', encoding='utf-8') as f:
         f.write(report)
     
-    # 存檔 JSON (方便自動化讀取)
+    # 存檔 JSON
     json_path = os.path.join(workspace['reports'], 'summary.json')
     json_data = {
         'date': date_str,
         'generated_at': datetime.now().isoformat(),
+        'filter_status': filter_status,
         'market': {
             'close': float(last.get('Close', 0)),
             'volume': float(last.get('Volume', 0)),
@@ -405,7 +480,10 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str)
             'pred_5d': float(last.get('LSTM_Pred_5d', 0)),
             'conf_5d': float(last.get('LSTM_Conf_5d', 0)),
         },
-        'strategies': res,
+        'strategies': {
+            'A': res.get('A', {}),
+            'B': res.get('B', {}),
+        },
         'advice': advice,
     }
     with open(json_path, 'w', encoding='utf-8') as f:
