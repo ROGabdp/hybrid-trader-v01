@@ -243,11 +243,36 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
     actual_last_date = raw_df.index[-1].strftime('%Y-%m-%d')
     print(f"[Data] 實際資料最後日期: {actual_last_date}")
     
+    # [v2.7] 成交量異常修補 (Volume Patcher)
+    # yfinance 對 ^TWII 在盤中常回傳 Volume=0，會導致 LSTM 預測嚴重失準
+    volume_before = raw_df['Volume'].copy()
+    has_zero_volume = (raw_df['Volume'] == 0).any() or raw_df['Volume'].isna().any()
+    
+    if has_zero_volume:
+        # Step 1: 將 0 替換為 NaN
+        raw_df['Volume'] = raw_df['Volume'].replace(0, np.nan)
+        # Step 2: 向前填充 (用昨天的量補今天的)
+        raw_df['Volume'] = raw_df['Volume'].ffill()
+        # Step 3: 向後填充 (處理開頭的 NaN)
+        raw_df['Volume'] = raw_df['Volume'].bfill()
+        print(f"[Data] ⚠️ 偵測到成交量異常，已使用昨日數據填補")
+        print(f"       原始最後一筆: {volume_before.iloc[-1]:.0f} → 修補後: {raw_df['Volume'].iloc[-1]:.0f}")
+    
+    # [v2.6] 匯出原始數據 CSV (修補後)
+    raw_csv_path = os.path.join(workspace['cache'], 'raw_data.csv')
+    raw_df.to_csv(raw_csv_path)
+    print(f"[Export] 原始數據已存檔: {raw_csv_path}")
+    
     print(f"[Compute] 計算特徵中 (使用當日模型)...")
     # 強制不使用快取，確保重新計算
     df = core_system.calculate_features(raw_df, raw_df, ticker="^TWII", use_cache=False)
     
-    # 存入當日快取
+    # [v2.6] 匯出處理後特徵數據 CSV
+    features_csv_path = os.path.join(workspace['cache'], 'processed_features.csv')
+    df.to_csv(features_csv_path)
+    print(f"[Export] 特徵數據已存檔: {features_csv_path}")
+    
+    # 存入當日快取 (pkl 格式，供後續載入使用)
     cache_file = os.path.join(workspace['cache'], 'twii_features.pkl')
     with open(cache_file, 'wb') as f:
         pickle.dump(df, f)
@@ -376,7 +401,7 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str)
     lines.append("=" * 50)
     lines.append(f"📅 日期: {date_str}")
     lines.append("=" * 50)
-    lines.append(f"📊 收盤: {last['Close']:.2f} | 量: {last['Volume']/1e8:.2f}億")
+    lines.append(f"📊 收盤: {last['Close']:.2f} | 量: {last['Volume']/1e3:.0f}億")
     lines.append("-" * 50)
     
     # 濾網狀態

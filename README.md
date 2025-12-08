@@ -164,10 +164,12 @@ python train_lstm_models.py
   python daily_ops_v4.py  # 僅 V4
   ```
 
-**功能特點 (v2.5)：**
+**功能特點 (v2.7)：**
 - **全時推論模式**: 無論 Donchian 濾網狀態，AI 都會執行預測並顯示意圖
 - **濾網狀態標記**: `BUY`, `WAIT`, `FILTERED (AI: BUY)`, `FILTERED (AI: WAIT)`
 - **情境分析**: Sell Agent 針對三種持倉情境 (成本區/獲利+10%/虧損-5%) 提供建議
+- **數據匯出**: 自動匯出 `raw_data.csv` 和 `processed_features.csv` 供除錯檢查
+- **成交量修補**: 自動偵測 yfinance 的 Volume=0 異常並用昨日數據填補
 - 自動動態回推訓練資料 (T+1/2000天, T+5/2200天)
 - 輸出 JSON 與 TXT 戰情報告 (`daily_runs/YYYY-MM-DD/reports/`)
 
