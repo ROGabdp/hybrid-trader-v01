@@ -18,6 +18,7 @@ V3 無濾網回測腳本 (No Buy Filter Backtest)
 import os
 import sys
 import pickle
+import argparse
 from datetime import datetime
 
 # Windows UTF-8 設定
@@ -44,8 +45,37 @@ V3_MODELS_PATH = os.path.join(PROJECT_PATH, 'models_hybrid_v3')
 RESULTS_PATH = os.path.join(PROJECT_PATH, 'results_backtest_v3_no_filter')
 CACHE_DIR = os.path.join(PROJECT_PATH, 'data', 'processed')
 
-SPLIT_DATE = '2023-01-01'  # 回測起始日
+DEFAULT_START_DATE = '2023-01-01'  # 預設回測起始日
+DEFAULT_END_DATE = None  # None 表示到最新資料
 INITIAL_CAPITAL = 1_000_000
+
+
+def parse_args():
+    """解析命令列參數"""
+    parser = argparse.ArgumentParser(
+        description='V3 無濾網回測腳本 - 支援自訂回測日期範圍',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+使用範例:
+  python backtest_v3_no_filter.py                           # 使用預設日期 (2023-01-01 至今)
+  python backtest_v3_no_filter.py --start 2022-01-01        # 從 2022-01-01 開始回測
+  python backtest_v3_no_filter.py --end 2024-06-30          # 回測到 2024-06-30
+  python backtest_v3_no_filter.py --start 2021-01-01 --end 2023-12-31  # 指定完整日期範圍
+        '''
+    )
+    parser.add_argument(
+        '--start', 
+        type=str, 
+        default=DEFAULT_START_DATE,
+        help=f'回測開始日期 (YYYY-MM-DD 格式，預設: {DEFAULT_START_DATE})'
+    )
+    parser.add_argument(
+        '--end', 
+        type=str, 
+        default=DEFAULT_END_DATE,
+        help='回測結束日期 (YYYY-MM-DD 格式，預設: 最新資料)'
+    )
+    return parser.parse_args()
 
 
 # =============================================================================
@@ -73,10 +103,10 @@ class NoFilterBacktester:
         close_prices = df['Close'].values
         dates = df.index
         
-        print(f"[Backtest] 回測期間: {dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}")
-        print(f"[Backtest] 資料筆數: {len(df)}")
-        print(f"[Backtest] 初始資金: ${capital:,.0f}")
-        print("[Backtest] 模式: 無濾網 (每天都可買進)")
+        print(f"[Backtest] Period: {dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}")
+        print(f"[Backtest] Data points: {len(df)}")
+        print(f"[Backtest] Initial capital: ${capital:,.0f}")
+        print("[Backtest] Mode: No Filter (daily buy check)")
         
         for i in range(len(df)):
             date = dates[i]
@@ -205,9 +235,35 @@ class NoFilterBacktester:
 # 主程式
 # =============================================================================
 def main():
+    # 解析命令列參數
+    args = parse_args()
+    
+    # 驗證日期格式
+    try:
+        start_date = pd.Timestamp(args.start)
+    except Exception as e:
+        print(f"[Error] Invalid start date format: {args.start}")
+        print("Please use YYYY-MM-DD format, e.g.: 2023-01-01")
+        sys.exit(1)
+    
+    end_date = None
+    if args.end:
+        try:
+            end_date = pd.Timestamp(args.end)
+        except Exception as e:
+            print(f"[Error] Invalid end date format: {args.end}")
+            print("Please use YYYY-MM-DD format, e.g.: 2024-12-31")
+            sys.exit(1)
+        
+        if end_date <= start_date:
+            print(f"[Error] End date ({args.end}) must be greater than start date ({args.start})")
+            sys.exit(1)
+    
     print("=" * 60)
-    print("V3 無濾網回測 (No Buy Filter Backtest)")
+    print("V3 No Filter Backtest")
     print("=" * 60)
+    print(f"  Start date: {args.start}")
+    print(f"  End date:   {args.end if args.end else 'Latest data'}")
     
     # 建立輸出目錄
     os.makedirs(RESULTS_PATH, exist_ok=True)
@@ -215,70 +271,104 @@ def main():
     # =========================================================================
     # 載入模型
     # =========================================================================
-    print("\n[Model] 載入 V3 模型...")
+    print("\n[Model] Loading V3 models...")
     buy_path = os.path.join(V3_MODELS_PATH, 'ppo_buy_twii_final.zip')
     sell_path = os.path.join(V3_MODELS_PATH, 'ppo_sell_twii_final.zip')
     
     if not os.path.exists(buy_path):
-        print(f"[Error] 模型不存在: {buy_path}")
-        print("請先執行 train_v3_models.py")
+        print(f"[Error] Model not found: {buy_path}")
+        print("Please run train_v3_models.py first")
         sys.exit(1)
     
     buy_model = PPO.load(buy_path)
     sell_model = PPO.load(sell_path)
-    print("  ✅ 模型載入成功")
+    print("  Models loaded successfully")
     
     # =========================================================================
     # 載入/計算特徵資料
     # =========================================================================
-    print("\n[Data] 準備回測資料...")
+    print("\n[Data] Preparing backtest data...")
     import ptrl_hybrid_system as hybrid
     
     hybrid.load_best_lstm_models()
     
     cache_path = os.path.join(CACHE_DIR, "_TWII_features.pkl")
     if os.path.exists(cache_path):
-        print(f"  [Cache] 載入快取: {cache_path}")
+        print(f"  [Cache] Loading: {cache_path}")
         with open(cache_path, 'rb') as f:
             twii_full_df = pickle.load(f)
     else:
-        print("  [Compute] 下載並計算特徵...")
+        print("  [Compute] Downloading and computing features...")
         twii_raw = yf.download("^TWII", start="2000-01-01", auto_adjust=True, progress=False)
         if isinstance(twii_raw.columns, pd.MultiIndex):
             twii_raw.columns = twii_raw.columns.get_level_values(0)
         twii_full_df = hybrid.calculate_features(twii_raw, twii_raw, ticker="^TWII", use_cache=True)
     
-    # 分割回測資料
-    split_date = pd.Timestamp(SPLIT_DATE)
-    twii_backtest_df = twii_full_df[twii_full_df.index >= split_date]
-    print(f"  回測期間: {twii_backtest_df.index[0].strftime('%Y-%m-%d')} ~ {twii_backtest_df.index[-1].strftime('%Y-%m-%d')}")
-    print(f"  資料筆數: {len(twii_backtest_df)}")
+    # 分割回測資料 (使用命令列指定的日期範圍)
+    twii_backtest_df = twii_full_df[twii_full_df.index >= start_date]
+    if end_date:
+        twii_backtest_df = twii_backtest_df[twii_backtest_df.index <= end_date]
+    
+    if len(twii_backtest_df) == 0:
+        print(f"[Error] No data in specified date range")
+        print(f"  Available range: {twii_full_df.index[0].strftime('%Y-%m-%d')} ~ {twii_full_df.index[-1].strftime('%Y-%m-%d')}")
+        sys.exit(1)
+    
+    print(f"  Period: {twii_backtest_df.index[0].strftime('%Y-%m-%d')} ~ {twii_backtest_df.index[-1].strftime('%Y-%m-%d')}")
+    print(f"  Data points: {len(twii_backtest_df)}")
     
     # =========================================================================
     # 執行回測
     # =========================================================================
-    print("\n[Backtest] 開始無濾網回測...")
+    print("\n[Backtest] Starting no-filter backtest...")
     backtester = NoFilterBacktester(buy_model, sell_model, INITIAL_CAPITAL)
     metrics = backtester.run(twii_backtest_df, hybrid.FEATURE_COLS)
     
     # =========================================================================
-    # 印出績效
+    # 計算 Benchmark (Buy & Hold) 績效指標
     # =========================================================================
-    print("\n" + "=" * 60)
-    print("📊 績效摘要 (無濾網 V3)")
-    print("=" * 60)
-    print(f"  初始資金:   ${metrics['initial_capital']:,.0f}")
-    print(f"  最終淨值:   ${metrics['final_value']:,.0f}")
-    print(f"  總報酬率:   {metrics['total_return']*100:+.2f}%")
-    print(f"  年化報酬:   {metrics['annualized_return']*100:+.2f}%")
-    print(f"  夏普值:     {metrics['sharpe_ratio']:.2f}")
-    print(f"  最大回撤:   {metrics['max_drawdown']*100:.2f}%")
-    print("-" * 60)
-    print(f"  交易次數:   {metrics['total_trades']}")
-    print(f"  勝率:       {metrics['win_rate']*100:.1f}%")
-    print(f"  平均報酬:   {metrics['avg_return']*100:+.2f}%")
-    print(f"  平均持有:   {metrics['avg_hold_days']:.1f} 天")
-    print("=" * 60)
+    equity_df = metrics['equity_df']
+    bench_slice = twii_full_df.loc[equity_df.index[0]:equity_df.index[-1]]['Close']
+    bench_normalized = bench_slice / bench_slice.iloc[0] * INITIAL_CAPITAL
+    
+    bench_initial = INITIAL_CAPITAL
+    bench_final = bench_normalized.iloc[-1]
+    bench_total_return = (bench_final - bench_initial) / bench_initial
+    
+    days = (bench_slice.index[-1] - bench_slice.index[0]).days
+    years = days / 365.0
+    bench_annualized = (1 + bench_total_return) ** (1 / years) - 1 if years > 0 else 0
+    
+    bench_daily_returns = bench_normalized.pct_change().dropna()
+    if len(bench_daily_returns) > 0 and bench_daily_returns.std() > 0:
+        bench_sharpe = (bench_daily_returns.mean() * 252 - 0.02) / (bench_daily_returns.std() * np.sqrt(252))
+    else:
+        bench_sharpe = 0
+    
+    bench_rolling_max = bench_normalized.cummax()
+    bench_drawdown = (bench_normalized - bench_rolling_max) / bench_rolling_max
+    bench_max_dd = bench_drawdown.min()
+    
+    # =========================================================================
+    # 印出績效 (Side by Side)
+    # =========================================================================
+    print("\n" + "=" * 70)
+    print("Performance Comparison: V3 (No Filter) vs Buy & Hold")
+    print("=" * 70)
+    print(f"{'Metric':<20} {'V3 (No Filter)':>20} {'Buy & Hold':>20}")
+    print("-" * 70)
+    print(f"{'Initial Capital':<20} ${metrics['initial_capital']:>18,.0f} ${bench_initial:>18,.0f}")
+    print(f"{'Final Value':<20} ${metrics['final_value']:>18,.0f} ${bench_final:>18,.0f}")
+    print(f"{'Total Return':<20} {metrics['total_return']*100:>19.2f}% {bench_total_return*100:>19.2f}%")
+    print(f"{'Annualized Return':<20} {metrics['annualized_return']*100:>19.2f}% {bench_annualized*100:>19.2f}%")
+    print(f"{'Sharpe Ratio':<20} {metrics['sharpe_ratio']:>20.2f} {bench_sharpe:>20.2f}")
+    print(f"{'Max Drawdown':<20} {metrics['max_drawdown']*100:>19.2f}% {bench_max_dd*100:>19.2f}%")
+    print("-" * 70)
+    print(f"{'Trades':<20} {metrics['total_trades']:>20}")
+    print(f"{'Win Rate':<20} {metrics['win_rate']*100:>19.1f}%")
+    print(f"{'Avg Return/Trade':<20} {metrics['avg_return']*100:>19.2f}%")
+    print(f"{'Avg Hold Days':<20} {metrics['avg_hold_days']:>20.1f}")
+    print("=" * 70)
     
     # =========================================================================
     # 視覺化
@@ -287,20 +377,36 @@ def main():
     
     # 子圖 1: Portfolio Value vs Benchmark
     ax1 = axes[0]
-    equity_df = metrics['equity_df']
     
     ax1.plot(equity_df.index, equity_df['value'], label='V3 (No Filter)', color='blue', linewidth=2)
-    
-    # Benchmark
-    bench_slice = twii_full_df.loc[equity_df.index[0]:equity_df.index[-1]]['Close']
-    bench_normalized = bench_slice / bench_slice.iloc[0] * INITIAL_CAPITAL
     ax1.plot(bench_normalized.index, bench_normalized.values, 
              label='^TWII Buy & Hold', color='gray', linewidth=1.5, alpha=0.7)
     
-    ax1.set_title('V3 無濾網回測 vs 大盤 (2023-Present)', fontsize=14)
+    date_range_str = f"{twii_backtest_df.index[0].strftime('%Y-%m-%d')} ~ {twii_backtest_df.index[-1].strftime('%Y-%m-%d')}"
+    ax1.set_title(f'V3 No Filter vs Buy & Hold ({date_range_str})', fontsize=14)
     ax1.set_ylabel('Portfolio Value ($)')
     ax1.legend(loc='upper left')
     ax1.grid(True, alpha=0.3)
+    
+    # 績效摘要文字框 (Side by Side)
+    summary_text = (
+        f"{'Metric':<12} {'V3':>12} {'B&H':>12}\n"
+        f"{'-'*38}\n"
+        f"{'Final':.<12} ${metrics['final_value']/1e6:>10.2f}M ${bench_final/1e6:>10.2f}M\n"
+        f"{'Return':.<12} {metrics['total_return']*100:>11.1f}% {bench_total_return*100:>11.1f}%\n"
+        f"{'Annual':.<12} {metrics['annualized_return']*100:>11.1f}% {bench_annualized*100:>11.1f}%\n"
+        f"{'Sharpe':.<12} {metrics['sharpe_ratio']:>12.2f} {bench_sharpe:>12.2f}\n"
+        f"{'Max DD':.<12} {metrics['max_drawdown']*100:>11.1f}% {bench_max_dd*100:>11.1f}%\n"
+        f"{'-'*38}\n"
+        f"{'Trades':.<12} {metrics['total_trades']:>12}\n"
+        f"{'Win Rate':.<12} {metrics['win_rate']*100:>11.1f}%"
+    )
+    
+    # 在圖表右下角加入績效摘要
+    props = dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor='gray')
+    ax1.text(0.98, 0.03, summary_text, transform=ax1.transAxes, fontsize=9,
+             verticalalignment='bottom', horizontalalignment='right',
+             bbox=props, family='monospace')
     
     # 子圖 2: Price with Signals
     ax2 = axes[1]
@@ -315,7 +421,7 @@ def main():
         sell_dates, sell_prices = zip(*backtester.sell_signals)
         ax2.scatter(sell_dates, sell_prices, marker='v', color='green', s=100, label='Sell', zorder=5)
     
-    ax2.set_title('交易訊號 (無濾網)', fontsize=14)
+    ax2.set_title('Trade Signals (No Filter)', fontsize=14)
     ax2.set_ylabel('Price')
     ax2.set_xlabel('Date')
     ax2.legend(loc='upper left')
@@ -323,26 +429,44 @@ def main():
     
     plt.tight_layout()
     
-    # 儲存圖表
-    save_path = os.path.join(RESULTS_PATH, 'backtest_v3_no_filter.png')
+    # 儲存圖表 (檔名包含日期範圍)
+    start_str = twii_backtest_df.index[0].strftime('%Y%m%d')
+    end_str = twii_backtest_df.index[-1].strftime('%Y%m%d')
+    save_path = os.path.join(RESULTS_PATH, f'backtest_v3_no_filter_{start_str}_{end_str}.png')
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    print(f"\n[Output] 圖表已儲存: {save_path}")
+    print(f"\n[Output] Chart saved: {save_path}")
     plt.close()
+    
+    # =========================================================================
+    # 儲存績效摘要 CSV (Side by Side)
+    # =========================================================================
+    metrics_df = pd.DataFrame({
+        'Metric': ['Initial_Capital', 'Final_Value', 'Total_Return_Pct', 'Annualized_Return_Pct', 
+                   'Sharpe_Ratio', 'Max_Drawdown_Pct', 'Trades', 'Win_Rate_Pct', 'Avg_Return_Pct', 'Avg_Hold_Days'],
+        'V3_No_Filter': [metrics['initial_capital'], metrics['final_value'], metrics['total_return']*100,
+                         metrics['annualized_return']*100, metrics['sharpe_ratio'], metrics['max_drawdown']*100,
+                         metrics['total_trades'], metrics['win_rate']*100, metrics['avg_return']*100, metrics['avg_hold_days']],
+        'Buy_Hold': [bench_initial, bench_final, bench_total_return*100, bench_annualized*100,
+                     bench_sharpe, bench_max_dd*100, 'N/A', 'N/A', 'N/A', 'N/A']
+    })
+    metrics_path = os.path.join(RESULTS_PATH, f'metrics_v3_no_filter_{start_str}_{end_str}.csv')
+    metrics_df.to_csv(metrics_path, index=False, encoding='utf-8-sig')
+    print(f"[Output] Metrics CSV: {metrics_path}")
     
     # =========================================================================
     # 儲存交易明細
     # =========================================================================
     if backtester.trades:
         trades_df = pd.DataFrame(backtester.trades)
-        trades_path = os.path.join(RESULTS_PATH, 'trades_v3_no_filter.csv')
+        trades_path = os.path.join(RESULTS_PATH, f'trades_v3_no_filter_{start_str}_{end_str}.csv')
         trades_df.to_csv(trades_path, index=False)
-        print(f"[Output] 交易明細: {trades_path}")
+        print(f"[Output] Trades CSV: {trades_path}")
         
-        print("\n[Trades] 最近 5 筆交易:")
+        print("\n[Trades] Last 5 trades:")
         print(trades_df.tail().to_string(index=False))
     
     print("\n" + "=" * 60)
-    print("✅ 回測完成！")
+    print("Backtest completed!")
     print("=" * 60)
 
 

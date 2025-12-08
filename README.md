@@ -182,6 +182,38 @@ python backtest_v3_no_filter.py  # V3 無濾網回測
 python backtest_v4_no_filter.py  # V4 無濾網回測
 ```
 
+**功能特點 (v2.8)：**
+
+| 功能 | 說明 |
+|------|------|
+| **自訂日期範圍** | 透過 `--start` 和 `--end` 參數指定回測期間 |
+| **動態檔名** | 輸出檔案自動包含日期範圍，避免覆蓋 |
+| **Benchmark 比較** | 策略績效 vs Buy & Hold 並排顯示 |
+| **績效摘要** | 控制台、圖表、CSV 三處同步顯示 |
+
+**使用範例：**
+```bash
+# 預設日期 (2023-01-01 至今)
+python backtest_v4_no_filter.py
+
+# 自訂開始日期
+python backtest_v4_no_filter.py --start 2020-01-01
+
+# 自訂完整日期範圍
+python backtest_v4_no_filter.py --start 2015-01-01 --end 2023-12-31
+
+# 查看使用說明
+python backtest_v4_no_filter.py --help
+```
+
+**輸出檔案：**
+```
+results_backtest_v4_no_filter/
+├── backtest_v4_no_filter_20200102_20251205.png   # 績效圖表 (含並排比較)
+├── metrics_v4_no_filter_20200102_20251205.csv    # 績效摘要 (V4 vs Buy&Hold)
+└── trades_v4_no_filter_20200102_20251205.csv     # 交易明細
+```
+
 ## 📈 訓練流程 (Training Pipeline)
 
 ### Phase 1: 數據擴充 (Data Expansion)
