@@ -91,8 +91,8 @@ def train_and_archive_lstm(workspace: dict, end_date: str):
     
     # 動態計算起始日期
     end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-    start_5d = (end_dt - timedelta(days=1800)).strftime('%Y-%m-%d')
-    start_1d = (end_dt - timedelta(days=1600)).strftime('%Y-%m-%d')
+    start_5d = (end_dt - timedelta(days=2200)).strftime('%Y-%m-%d')
+    start_1d = (end_dt - timedelta(days=2000)).strftime('%Y-%m-%d')
     
     split_ratio = "0.99"
     
@@ -226,8 +226,29 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
     actual_last_date = raw_df.index[-1].strftime('%Y-%m-%d')
     print(f"[Data] 實際資料最後日期: {actual_last_date}")
     
+    # [v2.7] 成交量異常修補
+    volume_before = raw_df['Volume'].copy()
+    has_zero_volume = (raw_df['Volume'] == 0).any() or raw_df['Volume'].isna().any()
+    
+    if has_zero_volume:
+        raw_df['Volume'] = raw_df['Volume'].replace(0, np.nan)
+        raw_df['Volume'] = raw_df['Volume'].ffill()
+        raw_df['Volume'] = raw_df['Volume'].bfill()
+        print(f"[Data] ⚠️ 偵測到成交量異常，已使用昨日數據填補")
+        print(f"       原始最後一筆: {volume_before.iloc[-1]:.0f} → 修補後: {raw_df['Volume'].iloc[-1]:.0f}")
+    
+    # [v2.6] 匯出原始數據 CSV
+    raw_csv_path = os.path.join(workspace['cache'], 'raw_data.csv')
+    raw_df.to_csv(raw_csv_path)
+    print(f"[Export] 原始數據已存檔: {raw_csv_path}")
+    
     print(f"[Compute] 計算特徵中 (使用當日模型 + 30次 MC Dropout)...")
     df = core_system.calculate_features(raw_df, raw_df, ticker="^TWII", use_cache=False)
+    
+    # [v2.6] 匯出特徵數據 CSV
+    features_csv_path = os.path.join(workspace['cache'], 'processed_features.csv')
+    df.to_csv(features_csv_path)
+    print(f"[Export] 特徵數據已存檔: {features_csv_path}")
     
     cache_file = os.path.join(workspace['cache'], 'twii_features.pkl')
     with open(cache_file, 'wb') as f:
@@ -238,7 +259,7 @@ def isolated_feature_engineering(workspace: dict, end_date: str) -> pd.DataFrame
 
 
 # =============================================================================
-# Step 3: V4 單一策略推論
+# Step 3: V4 單一策略推論 (v2.7 - 全時推論 + 情境分析)
 # =============================================================================
 def single_strategy_inference(workspace: dict, df: pd.DataFrame) -> dict:
     print("\n" + "=" * 60)
@@ -250,47 +271,70 @@ def single_strategy_inference(workspace: dict, df: pd.DataFrame) -> dict:
     FEATURE_COLS = core_system.FEATURE_COLS
     latest = df.iloc[-1]
     
+    # 獲取濾網狀態
+    signal_buy_filter = bool(latest.get('Signal_Buy_Filter', False))
+    print(f"  [濾網] Signal_Buy_Filter = {signal_buy_filter}")
+    
     features = []
     for col in FEATURE_COLS:
         val = latest.get(col, 0.0)
         features.append(val)
     features = np.array(features, dtype=np.float32).reshape(1, -1)
-    
     features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
     
-    result = {}
+    result = {'filter_status': signal_buy_filter}
+    
+    # 三種持倉情境
+    SELL_SCENARIOS = {
+        'cost': 1.00,
+        'profit': 1.10,
+        'loss': 0.95,
+    }
     
     buy_path = os.path.join(V4_MODEL_PATH, 'ppo_buy_twii_final.zip')
     sell_path = os.path.join(V4_MODEL_PATH, 'ppo_sell_twii_final.zip')
     
     if not os.path.exists(buy_path):
         print(f"[Error] V4 模型不存在: {buy_path}")
-        return {'error': 'Model not found'}
+        return {'error': 'Model not found', 'filter_status': signal_buy_filter}
 
     try:
         buy_agent = PPO.load(buy_path)
         sell_agent = PPO.load(sell_path)
         
+        # Buy Logic (全時推論)
         b_act, _ = buy_agent.predict(features, deterministic=True)
         b_obs = buy_agent.policy.obs_to_tensor(features)[0]
         b_prob = buy_agent.policy.get_distribution(b_obs).distribution.probs.detach().cpu().numpy()[0]
         
-        s_feat = np.concatenate([features[0], [1.0]]).reshape(1, -1)
-        s_act, _ = sell_agent.predict(s_feat, deterministic=True)
+        ai_action = 'BUY' if b_act[0] == 1 else 'WAIT'
+        buy_prob = float(b_prob[1]) if b_act[0] == 1 else float(b_prob[0])
         
-        result = {
-            'buy_signal': 'BUY' if b_act[0] == 1 else 'WAIT',
-            'buy_prob': float(b_prob[1]) if b_act[0] == 1 else float(b_prob[0]),
-            'sell_signal': 'SELL' if s_act[0] == 1 else 'HOLD'
-        }
+        if signal_buy_filter:
+            buy_signal = ai_action
+        else:
+            buy_signal = f"FILTERED (AI: {ai_action})"
         
-        buy_icon = "🚀" if result['buy_signal'] == 'BUY' else "💤"
-        sell_icon = "📤" if result['sell_signal'] == 'SELL' else "🛡️"
-        print(f"  {buy_icon} Buy:  {result['buy_signal']} ({result['buy_prob']:.1%})")
-        print(f"  {sell_icon} Sell: {result['sell_signal']}")
+        print(f"  [Buy] {buy_signal} ({buy_prob:.1%})")
+        
+        # Sell Logic (情境分析)
+        sell_scenarios = {}
+        for scenario_name, return_value in SELL_SCENARIOS.items():
+            s_feat = np.concatenate([features[0], [return_value]]).reshape(1, -1)
+            s_act, _ = sell_agent.predict(s_feat, deterministic=True)
+            sell_scenarios[scenario_name] = 'SELL' if s_act[0] == 1 else 'HOLD'
+        
+        print(f"  [Sell] 成本={sell_scenarios['cost']} | 獲利={sell_scenarios['profit']} | 虧損={sell_scenarios['loss']}")
+        
+        result.update({
+            'buy_signal': buy_signal,
+            'buy_prob': buy_prob,
+            'ai_action': ai_action,
+            'sell_scenarios': sell_scenarios,
+        })
         
     except Exception as e:
-        result = {'error': str(e)}
+        result['error'] = str(e)
         print(f"  [Error] 推論失敗: {e}")
         import traceback
         traceback.print_exc()
@@ -299,54 +343,77 @@ def single_strategy_inference(workspace: dict, df: pd.DataFrame) -> dict:
 
 
 # =============================================================================
-# Step 4: 輸出報告
+# Step 4: 輸出報告 (v2.7)
 # =============================================================================
 def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str):
     print("\n" + "=" * 60)
-    print("📊 Step 4: 戰情儀表板 (V4)")
+    print("📊 Step 4: 戰情儀表板 (V4 v2.7)")
     print("=" * 60)
     
     last = df.iloc[-1]
+    filter_status = res.get('filter_status', False)
     
     lines = []
     lines.append("=" * 50)
     lines.append(f"📅 日期: {date_str}")
     lines.append("=" * 50)
+    lines.append(f"📊 收盤: {last['Close']:.2f} | 量: {last['Volume']/1e4:.0f}萬張")
+    lines.append("-" * 50)
     
-    lines.append("\n📈 [市場數據]")
-    lines.append(f"   收盤價: {last['Close']:.2f}")
-    lines.append(f"   成交量: {last['Volume']/1e8:.2f} 億")
+    # 濾網狀態
+    filter_icon = "✅" if filter_status else "🚫"
+    filter_text = "通過 (Donchian 突破)" if filter_status else "未通過 (非突破日)"
+    lines.append(f"🚦 [濾網狀態] {filter_icon} {filter_text}")
+    lines.append("-" * 50)
     
-    lines.append("\n🔮 [分析師 LSTM]")
-    pred_1d = last.get('LSTM_Pred_1d', 0) * 100
-    pred_5d = last.get('LSTM_Pred_5d', 0) * 100
-    conf_5d = last.get('LSTM_Conf_5d', 0) * 100
+    # LSTM
+    lines.append("🔮 [分析師 LSTM]")
+    lines.append(f"   T+1 漲跌: {last.get('LSTM_Pred_1d', 0)*100:+.2f}%")
+    lines.append(f"   T+5 漲跌: {last.get('LSTM_Pred_5d', 0)*100:+.2f}%")
+    lines.append(f"   信心度:   {last.get('LSTM_Conf_5d', 0)*100:.1f}%")
+    lines.append("-" * 50)
     
-    lines.append(f"   T+1 預測漲跌: {pred_1d:+.2f}%")
-    lines.append(f"   T+5 預測漲跌: {pred_5d:+.2f}%")
-    lines.append(f"   信心度:       {conf_5d:.1f}%")
+    # V4 策略
+    lines.append("🤖 [操盤手 V4] (輕量化)")
     
-    lines.append("\n🤖 [操盤手 V4] (輕量化)")
     if 'error' not in res:
-        buy_icon = "🚀" if res['buy_signal'] == 'BUY' else "💤"
-        sell_icon = "📤" if res['sell_signal'] == 'SELL' else "🛡️"
-        lines.append(f"   {buy_icon} 買進訊號: {res['buy_signal']} ({res['buy_prob']:.1%})")
-        lines.append(f"   {sell_icon} 賣出訊號: {res['sell_signal']}")
+        buy_signal = res['buy_signal']
+        buy_prob = res['buy_prob']
         
-        if res['buy_signal'] == 'BUY':
-            if conf_5d >= 80:
-                advice = "⭐⭐ 高信心買進 (High Confidence Buy)"
-            else:
-                advice = "⚠️ 低信心買進 (Low Confidence Buy)"
-        elif res['sell_signal'] == 'SELL':
-            advice = "📤 建議賣出 (Sell)"
+        if buy_signal == 'BUY':
+            buy_icon = "🚀"
+        elif buy_signal == 'WAIT':
+            buy_icon = "💤"
+        elif 'FILTERED' in buy_signal:
+            buy_icon = "🚫"
         else:
-            advice = "💤 空手觀望 (Wait)"
+            buy_icon = "❓"
+        
+        lines.append(f"   🛒 買入: {buy_icon} {buy_signal} ({buy_prob:.1%})")
+        
+        # 賣出情境矩陣
+        ss = res.get('sell_scenarios', {})
+        lines.append(f"   📦 賣出:")
+        lines.append(f"      ├─ 成本區 (0%):  {ss.get('cost', 'N/A')}")
+        lines.append(f"      ├─ 獲利中 (+10%): {ss.get('profit', 'N/A')}")
+        lines.append(f"      └─ 虧損中 (-5%):  {ss.get('loss', 'N/A')}")
+        
+        # 綜合建議
+        ai_action = res.get('ai_action', 'N/A')
+        if not filter_status:
+            if ai_action == 'BUY':
+                advice = "🚫 濾網攔截 | AI 意圖: 買進 (被擋下)"
+            else:
+                advice = "🚫 濾網攔截 | AI 意圖: 觀望"
+        elif ai_action == 'BUY':
+            advice = "⭐ V4 買進"
+        else:
+            advice = "💤 空手觀望"
     else:
         lines.append(f"   ❌ 錯誤: {res['error']}")
         advice = "❓ 推論失敗"
     
-    lines.append("\n" + "-" * 50)
+    lines.append("-" * 50)
     lines.append(f"💡 綜合建議: {advice}")
     lines.append("=" * 50)
     

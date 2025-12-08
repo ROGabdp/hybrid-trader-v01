@@ -170,7 +170,7 @@ python train_lstm_models.py
 - **情境分析**: Sell Agent 針對三種持倉情境 (成本區/獲利+10%/虧損-5%) 提供建議
 - **數據匯出**: 自動匯出 `raw_data.csv` 和 `processed_features.csv` 供除錯檢查
 - **成交量修補**: 自動偵測 yfinance 的 Volume=0 異常並用昨日數據填補
-- 自動動態回推訓練資料 (T+1/2000天, T+5/2200天)
+- **統一訓練天數**: 三個 daily_ops 腳本均使用 T+5/2200天, T+1/2000天
 - 輸出 JSON 與 TXT 戰情報告 (`daily_runs/YYYY-MM-DD/reports/`)
 
 ### 4. 無濾網回測 (No-Filter Backtest)
