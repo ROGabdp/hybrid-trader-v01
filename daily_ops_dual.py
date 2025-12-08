@@ -401,7 +401,7 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str)
     lines.append("=" * 50)
     lines.append(f"📅 日期: {date_str}")
     lines.append("=" * 50)
-    lines.append(f"📊 收盤: {last['Close']:.2f} | 量: {last['Volume']/1e3:.0f}億")
+    lines.append(f"📊 收盤: {last['Close']:.2f} | 量: {last['Volume']/1e4:.0f}萬張")
     lines.append("-" * 50)
     
     # 濾網狀態
