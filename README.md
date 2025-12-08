@@ -164,10 +164,21 @@ python train_lstm_models.py
   python daily_ops_v4.py  # 僅 V4
   ```
 
-**功能特點：**
+**功能特點 (v2.5)：**
+- **全時推論模式**: 無論 Donchian 濾網狀態，AI 都會執行預測並顯示意圖
+- **濾網狀態標記**: `BUY`, `WAIT`, `FILTERED (AI: BUY)`, `FILTERED (AI: WAIT)`
+- **情境分析**: Sell Agent 針對三種持倉情境 (成本區/獲利+10%/虧損-5%) 提供建議
 - 自動動態回推訓練資料 (T+1/2000天, T+5/2200天)
-- 自動解決 Lookahead Bias
-- 輸出 JSON 與 TXT 戰情報告 (`daily_runs_vX/YYYY-MM-DD/reports/`)
+- 輸出 JSON 與 TXT 戰情報告 (`daily_runs/YYYY-MM-DD/reports/`)
+
+### 4. 無濾網回測 (No-Filter Backtest)
+
+測試 AI 在每天都可進場 (無 Donchian 濾網限制) 的情況下的績效：
+
+```bash
+python backtest_v3_no_filter.py  # V3 無濾網回測
+python backtest_v4_no_filter.py  # V4 無濾網回測
+```
 
 ## 📈 訓練流程 (Training Pipeline)
 
