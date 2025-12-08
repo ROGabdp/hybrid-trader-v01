@@ -182,7 +182,7 @@ python backtest_v3_no_filter.py  # V3 無濾網回測
 python backtest_v4_no_filter.py  # V4 無濾網回測
 ```
 
-**功能特點 (v2.8)：**
+**功能特點 (v2.9)：**
 
 | 功能 | 說明 |
 |------|------|
@@ -193,7 +193,7 @@ python backtest_v4_no_filter.py  # V4 無濾網回測
 
 **使用範例：**
 ```bash
-# 預設日期 (2023-01-01 至今)
+# 預設日期 (2024-01-01 至今)
 python backtest_v4_no_filter.py
 
 # 自訂開始日期
@@ -201,17 +201,31 @@ python backtest_v4_no_filter.py --start 2020-01-01
 
 # 自訂完整日期範圍
 python backtest_v4_no_filter.py --start 2015-01-01 --end 2023-12-31
-
-# 查看使用說明
-python backtest_v4_no_filter.py --help
 ```
+
+### 5. DCA + AI 混合策略回測
+
+測試「定期定額 + AI 自由操作」混合策略的績效：
+
+```bash
+python backtest_v4_dca_hybrid_no_filter.py
+```
+
+**策略說明：**
+- 每年年初獲得 60 萬新資金
+- 50% 分 12 個月定期定額投入 (買入後不賣)
+- 50% 由 AI 自由決定買賣時機
+
+**比較基準：**
+1. 純定期定額：每月 5 萬元
+2. 年初一次投入：每年 60 萬 Buy & Hold
 
 **輸出檔案：**
 ```
-results_backtest_v4_no_filter/
-├── backtest_v4_no_filter_20200102_20251205.png   # 績效圖表 (含並排比較)
-├── metrics_v4_no_filter_20200102_20251205.csv    # 績效摘要 (V4 vs Buy&Hold)
-└── trades_v4_no_filter_20200102_20251205.csv     # 交易明細
+results_backtest_v4_dca_hybrid_no_filter/
+├── backtest_v4_dca_hybrid_no_filter_20240102_20251205.png
+├── metrics_v4_dca_hybrid_no_filter_20240102_20251205.csv
+└── trades_v4_dca_hybrid_no_filter_20240102_20251205.csv
 ```
 
 ## 📈 訓練流程 (Training Pipeline)
